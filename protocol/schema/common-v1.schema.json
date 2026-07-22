@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rainingembers.org/schemas/embersync/common-v1.schema.json",
+  "title": "EmberSync protocol v1 common definitions",
+  "$defs": {
+    "utcInstant": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+    },
+    "installationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$"
+    },
+    "sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "guildKey": {
+      "enum": ["main", "alt"]
+    },
+    "stateDatasetName": {
+      "enum": [
+        "auction_house", "calendar", "character", "guild_chat", "collections",
+        "crafting", "damage_meter", "guild", "guild_bank", "housing",
+        "inventory", "mail_metadata", "mythic_plus", "professions",
+        "progression", "pvp"
+      ]
+    },
+    "eventDatasetName": {
+      "enum": ["events.guild_chat", "events.officer_chat"]
+    },
+    "datasetName": {
+      "oneOf": [
+        { "$ref": "#/$defs/stateDatasetName" },
+        { "$ref": "#/$defs/eventDatasetName" }
+      ]
+    },
+    "datasetScope": {
+      "enum": ["guild", "character", "account", "house", "neighborhood", "session"]
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } }
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["status", "observedAt"],
+      "properties": {
+        "status": {
+          "enum": ["complete", "partial", "forbidden", "interaction_required", "unavailable", "unsupported"]
+        },
+        "observedAt": { "$ref": "#/$defs/utcInstant" },
+        "reasonCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "detail": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "recordCount": { "type": "integer", "minimum": 0 },
+        "evictedBefore": { "$ref": "#/$defs/utcInstant" }
+        ,"metadata": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } }
+      },
+      "additionalProperties": true
+    },
+    "permissionEvidence": {
+      "type": "object",
+      "description": "Observational only; it must never be used as authorization.",
+      "required": ["observedAt", "guildRankIndex"],
+      "properties": {
+        "observedAt": { "$ref": "#/$defs/utcInstant" },
+        "guildRankIndex": { "type": "integer", "minimum": 0, "maximum": 9 },
+        "guildRankName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "canViewOfficerNote": { "type": "boolean" },
+        "canUseOfficerChat": { "type": "boolean" },
+        "metadata": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "guildBankTabs": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "required": ["tabId", "canView"],
+            "properties": {
+              "tabId": { "type": "integer", "minimum": 1, "maximum": 8 },
+              "canView": { "type": "boolean" },
+              "canDeposit": { "type": "boolean" },
+              "remainingWithdrawals": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "addonGuild": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["key", "name", "realm", "region"],
+          "properties": {
+            "key": { "const": "main" }, "name": { "const": "Raining Embers" },
+            "realm": { "const": "Dalaran" }, "region": { "const": 1 }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["key", "name", "realm", "region"],
+          "properties": {
+            "key": { "const": "alt" }, "name": { "const": "Raining Embers Alts" },
+            "realm": { "const": "Wyrmrest Accord" }, "region": { "const": 1 }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "canonicalGuild": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["key", "name", "slug", "foundingRealm", "realmSlug", "region", "profileUrl"],
+          "properties": {
+            "key": { "const": "main" }, "name": { "const": "Raining Embers" },
+            "slug": { "const": "raining-embers" }, "foundingRealm": { "const": "Dalaran" },
+            "realmSlug": { "const": "dalaran" }, "region": { "const": "US" },
+            "profileUrl": { "const": "https://worldofwarcraft.blizzard.com/en-us/guild/us/dalaran/raining-embers" }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["key", "name", "slug", "foundingRealm", "realmSlug", "region", "profileUrl"],
+          "properties": {
+            "key": { "const": "alt" }, "name": { "const": "Raining Embers Alts" },
+            "slug": { "const": "raining-embers-alts" }, "foundingRealm": { "const": "Wyrmrest Accord" },
+            "realmSlug": { "const": "wyrmrest-accord" }, "region": { "const": "US" },
+            "profileUrl": { "const": "https://worldofwarcraft.blizzard.com/en-us/guild/us/wyrmrest-accord/raining-embers-alts" }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "addonSourceCharacter": {
+      "type": "object",
+      "required": ["id", "name", "realm", "rankIndex"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^Player-[0-9]+-[0-9A-Fa-f]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "realm": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "rankIndex": { "type": "integer", "minimum": 0, "maximum": 9 }
+      },
+      "additionalProperties": true
+    },
+    "sourceCharacter": {
+      "type": "object",
+      "required": ["guid", "name", "realm", "realmSlug"],
+      "properties": {
+        "guid": { "type": "string", "pattern": "^Player-[0-9]+-[0-9A-Fa-f]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "realm": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "realmSlug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+      },
+      "additionalProperties": true
+    },
+    "addonDatasetEnvelope": {
+      "type": "object",
+      "required": ["schemaVersion", "dataset", "scope", "subjectId", "guildKey", "guild", "sourceCharacter", "installationId", "sequence", "capturedAt", "coverage", "payload"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "dataset": { "$ref": "#/$defs/stateDatasetName" },
+        "scope": { "$ref": "#/$defs/datasetScope" },
+        "subjectId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "guildKey": { "$ref": "#/$defs/guildKey" },
+        "guild": { "$ref": "#/$defs/addonGuild" },
+        "sourceCharacter": { "$ref": "#/$defs/addonSourceCharacter" },
+        "installationId": { "$ref": "#/$defs/installationId" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "capturedAt": { "type": "integer", "minimum": 1 },
+        "coverage": { "$ref": "#/$defs/addonCoverage" },
+        "permissionEvidence": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "payload": { "$ref": "#/$defs/jsonValue" }
+      },
+      "additionalProperties": true
+    },
+    "addonCoverage": {
+      "type": "object",
+      "required": ["status", "observedAt"],
+      "properties": {
+        "status": {
+          "enum": ["complete", "partial", "forbidden", "interaction_required", "unavailable", "unsupported"]
+        },
+        "observedAt": { "type": "integer", "minimum": 1 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+    },
+    "addonEvent": {
+      "type": "object",
+      "required": ["sequence", "capturedAt", "guildKey", "sourceCharacter", "payload"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "capturedAt": { "type": "integer", "minimum": 1 },
+        "guildKey": { "$ref": "#/$defs/guildKey" },
+        "sourceCharacter": { "$ref": "#/$defs/addonSourceCharacter" },
+        "payload": { "$ref": "#/$defs/jsonValue" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

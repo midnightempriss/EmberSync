@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EmberSync",
+  "version": "0.1.0",
+  "identifier": "org.rainingembers.embersync",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; frame-src 'none'; base-uri 'self'"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "EmberSync",
+        "width": 1120,
+        "height": 760,
+        "minWidth": 780,
+        "minHeight": 620,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "category": "Utility",
+    "shortDescription": "Secure Raining Embers game and guild data sync",
+    "longDescription": "EmberSync securely transfers approved World of Warcraft SavedVariables for Raining Embers and Raining Embers Alts.",
+    "licenseFile": "../../LICENSE",
+    "copyright": "Copyright Raining Embers",
+    "publisher": "Raining Embers",
+    "linux": {
+      "deb": { "depends": [] }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkzOEI4MTdDOUE3RTUwNTEKUldSUlVINmFmSUdMazNFS2UveWZGMTF6cmJIeHJTMWltOVQ2a0toK084VTdSUEIvbzJDdko2dW0K",
+      "endpoints": [
+        "https://github.com/midnightempriss/EmberSync/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+## Interface: 120007
+## Title: EmberSync
+## Notes: Private game and guild data sync for Raining Embers.
+## Author: Raining Embers
+## Version: 0.1.0
+## SavedVariables: EmberSyncDB
+## IconTexture: Interface\Icons\INV_Elemental_Primal_Fire
+## AddonCompartmentFunc: EmberSync_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: EmberSync_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: EmberSync_OnAddonCompartmentLeave
+## X-Website: https://rainingembers.org
+## X-Category: Guild
+
+Core\Namespace.lua
+Core\Constants.lua
+Locales\enUS.lua
+Core\Util.lua
+Core\Coverage.lua
+Core\GuildLock.lua
+Core\Database.lua
+Core\CollectorManager.lua
+
+Collectors\Character.lua
+Collectors\Guild.lua
+Collectors\Calendar.lua
+Collectors\GuildBank.lua
+Collectors\Housing.lua
+Collectors\Collections.lua
+Collectors\Professions.lua
+Collectors\Inventory.lua
+Collectors\Progression.lua
+Collectors\MythicPlus.lua
+Collectors\PvP.lua
+Collectors\Crafting.lua
+Collectors\AuctionHouse.lua
+Collectors\Mail.lua
+Collectors\DamageMeter.lua
+Collectors\Chat.lua
+
+UI\MainWindow.lua
+UI\Minimap.lua
+Core\Bootstrap.lua

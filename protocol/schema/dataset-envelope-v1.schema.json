@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rainingembers.org/schemas/embersync/dataset-envelope-v1.schema.json",
+  "title": "EmberSync upload dataset envelope v1",
+  "type": "object",
+  "required": ["schemaVersion", "protocolVersion", "dataset", "kind", "scope", "subjectId", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "coverage", "payloadHash", "payload"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "protocolVersion": { "const": "1.0" },
+    "dataset": { "$ref": "common-v1.schema.json#/$defs/datasetName" },
+    "kind": { "enum": ["state", "events"] },
+    "scope": { "$ref": "common-v1.schema.json#/$defs/datasetScope" },
+    "subjectId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "guildKey": { "$ref": "common-v1.schema.json#/$defs/guildKey" },
+    "guild": { "$ref": "common-v1.schema.json#/$defs/canonicalGuild" },
+    "sourceCharacter": { "$ref": "common-v1.schema.json#/$defs/sourceCharacter" },
+    "installationId": { "$ref": "common-v1.schema.json#/$defs/installationId" },
+    "exportSequence": { "type": "integer", "minimum": 0 },
+    "capturedAt": { "$ref": "common-v1.schema.json#/$defs/utcInstant" },
+    "coverage": { "$ref": "common-v1.schema.json#/$defs/coverage" },
+    "permissionEvidence": { "$ref": "common-v1.schema.json#/$defs/permissionEvidence" },
+    "payloadHash": { "$ref": "common-v1.schema.json#/$defs/sha256Hex" },
+    "payload": { "$ref": "common-v1.schema.json#/$defs/jsonValue" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "dataset": { "$ref": "common-v1.schema.json#/$defs/eventDatasetName" } } },
+      "then": {
+        "properties": {
+          "kind": { "const": "events" },
+          "subjectId": { "pattern": "^[A-Za-z0-9_-]{16,128}:Player-[0-9]+-[0-9A-Fa-f]+:[0-9]+$" }
+        }
+      },
+      "else": { "properties": { "kind": { "const": "state" } } }
+    }
+  ],
+  "additionalProperties": true
+}

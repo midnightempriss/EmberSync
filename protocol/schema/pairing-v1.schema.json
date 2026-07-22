@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rainingembers.org/schemas/embersync/pairing-v1.schema.json",
+  "title": "EmberSync pairing request v1",
+  "$ref": "#/$defs/pairingStartRequest",
+  "$defs": {
+    "pairingStartRequest": {
+      "type": "object",
+      "required": ["protocolVersion", "publicKeyAlgorithm", "devicePublicKey", "deviceName", "platform", "clientVersion"],
+      "properties": {
+        "protocolVersion": { "const": "1.0" },
+        "publicKeyAlgorithm": { "const": "Ed25519" },
+        "devicePublicKey": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+        "deviceName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "platform": { "enum": ["windows", "macos", "linux"] },
+        "clientVersion": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": true
+    },
+    "pairingStartResponse": {
+      "type": "object",
+      "required": ["deviceCode", "verificationCode", "verificationUri", "expiresAt", "pollIntervalSeconds"],
+      "properties": {
+        "deviceCode": { "type": "string", "minLength": 32, "maxLength": 256 },
+        "verificationCode": { "type": "string", "minLength": 6, "maxLength": 16 },
+        "verificationUri": { "type": "string", "format": "uri", "pattern": "^https://rainingembers\\.org/" },
+        "expiresAt": { "$ref": "common-v1.schema.json#/$defs/utcInstant" },
+        "pollIntervalSeconds": { "type": "integer", "minimum": 1, "maximum": 60 }
+      },
+      "additionalProperties": true
+    },
+    "pairingPollRequest": {
+      "type": "object",
+      "required": ["protocolVersion", "deviceCode"],
+      "properties": {
+        "protocolVersion": { "const": "1.0" },
+        "deviceCode": { "type": "string", "minLength": 32, "maxLength": 256 }
+      },
+      "additionalProperties": true
+    },
+    "pairingPollResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "expiresAt"],
+          "properties": {
+            "status": { "const": "pending" },
+            "expiresAt": { "$ref": "common-v1.schema.json#/$defs/utcInstant" }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": { "status": { "enum": ["denied", "expired"] } },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["status", "deviceId", "uploadScopes", "serverTime"],
+          "properties": {
+            "status": { "const": "approved" },
+            "deviceId": { "type": "string", "minLength": 16, "maxLength": 128 },
+            "uploadScopes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": { "$ref": "common-v1.schema.json#/$defs/guildKey" }
+            },
+            "serverTime": { "$ref": "common-v1.schema.json#/$defs/utcInstant" }
+          },
+          "additionalProperties": true
+        }
+      ]
+    }
+  }
+}

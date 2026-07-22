@@ -1,0 +1,58 @@
+[package]
+name = "embersync-desktop"
+version = "0.1.0"
+description = "Secure Raining Embers SavedVariables sync client"
+authors = ["Raining Embers"]
+license = "MIT"
+repository = "https://github.com/midnightempriss/EmberSync"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "embersync_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "embersync-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+argon2 = "0.5"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+flate2 = "1"
+hex = "0.4"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
+notify = "8"
+parking_lot = "0.12"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+subtle = "2"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
+url = "2"
+unicode-normalization = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"

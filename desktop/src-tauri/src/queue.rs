@@ -1,0 +1,472 @@
+use crate::{
+    canonical,
+    models::{DatasetKind, QueueSummary, UploadEnvelope},
+};
+use argon2::Argon2;
+use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    XChaCha20Poly1305, XNonce,
+};
+use parking_lot::Mutex;
+use rand::{rngs::OsRng, RngCore};
+use rusqlite::{params, Connection, OptionalExtension};
+use sha2::Digest;
+use std::{path::Path, sync::Arc};
+use thiserror::Error;
+use zeroize::Zeroizing;
+
+const KEYRING_SERVICE: &str = "org.rainingembers.embersync";
+const KEYRING_USER: &str = "local-queue-master-key-v1";
+const VERIFIER: &[u8] = b"EmberSync passphrase vault v1";
+
+#[derive(Debug, Error)]
+pub enum QueueError {
+    #[error("local encrypted vault is locked")]
+    Locked,
+    #[error("operating-system credential vault is unavailable: {0}")]
+    CredentialVault(String),
+    #[error("stored credential has an invalid length")]
+    InvalidCredential,
+    #[error("incorrect passphrase")]
+    IncorrectPassphrase,
+    #[error("local database error: {0}")]
+    Database(#[from] rusqlite::Error),
+    #[error("local encryption failed")]
+    Encryption,
+    #[error("queued payload is invalid: {0}")]
+    InvalidPayload(#[from] serde_json::Error),
+    #[error("passphrase derivation failed")]
+    Derivation,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueuedUpload {
+    pub id: i64,
+    pub envelope: UploadEnvelope,
+    pub attempts: u32,
+}
+
+pub struct QueueStore {
+    connection: Mutex<Connection>,
+    key: Mutex<Option<Zeroizing<[u8; 32]>>>,
+}
+
+impl QueueStore {
+    pub fn open(path: &Path) -> Result<Arc<Self>, QueueError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| QueueError::CredentialVault(error.to_string()))?;
+        }
+        let connection = Connection::open(path)?;
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS vault_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS upload_queue (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               content_hash TEXT NOT NULL UNIQUE,
+               coalesce_key TEXT UNIQUE,
+               guild_key TEXT NOT NULL CHECK (guild_key IN ('main','alt')),
+               dataset TEXT NOT NULL,
+               kind TEXT NOT NULL CHECK (kind IN ('state','events')),
+               nonce BLOB NOT NULL CHECK (length(nonce) = 24),
+               ciphertext BLOB NOT NULL,
+               status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','uploading','failed')),
+               attempts INTEGER NOT NULL DEFAULT 0,
+               next_attempt_at INTEGER NOT NULL DEFAULT 0,
+               last_error TEXT,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS secure_meta (
+               key TEXT PRIMARY KEY,
+               nonce BLOB NOT NULL CHECK (length(nonce) = 24),
+               ciphertext BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS upload_queue_ready ON upload_queue(status, next_attempt_at, id);"
+        )?;
+        Ok(Arc::new(Self {
+            connection: Mutex::new(connection),
+            key: Mutex::new(None),
+        }))
+    }
+
+    pub fn unlock_from_os_vault(&self) -> Result<(), QueueError> {
+        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+            .map_err(|error| QueueError::CredentialVault(error.to_string()))?;
+        let bytes = match entry.get_secret() {
+            Ok(secret) => secret,
+            Err(keyring::Error::NoEntry) => {
+                let mut generated = Zeroizing::new([0_u8; 32]);
+                OsRng.fill_bytes(generated.as_mut());
+                entry
+                    .set_secret(generated.as_ref())
+                    .map_err(|error| QueueError::CredentialVault(error.to_string()))?;
+                generated.to_vec()
+            }
+            Err(error) => return Err(QueueError::CredentialVault(error.to_string())),
+        };
+        let key: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| QueueError::InvalidCredential)?;
+        *self.key.lock() = Some(Zeroizing::new(key));
+        Ok(())
+    }
+
+    pub fn unlock_with_passphrase(&self, passphrase: &str) -> Result<(), QueueError> {
+        if passphrase.chars().count() < 12 {
+            return Err(QueueError::Derivation);
+        }
+        let salt = {
+            let connection = self.connection.lock();
+            let existing: Option<String> = connection
+                .query_row(
+                    "SELECT value FROM vault_meta WHERE key='passphrase_salt'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match existing {
+                Some(value) => STANDARD_NO_PAD
+                    .decode(value)
+                    .map_err(|_| QueueError::Derivation)?,
+                None => {
+                    let mut salt = [0_u8; 16];
+                    OsRng.fill_bytes(&mut salt);
+                    connection.execute(
+                        "INSERT INTO vault_meta(key,value) VALUES('passphrase_salt',?1)",
+                        [STANDARD_NO_PAD.encode(salt)],
+                    )?;
+                    salt.to_vec()
+                }
+            }
+        };
+        let mut key = Zeroizing::new([0_u8; 32]);
+        Argon2::default()
+            .hash_password_into(passphrase.as_bytes(), &salt, key.as_mut())
+            .map_err(|_| QueueError::Derivation)?;
+        let verifier = self.meta("passphrase_verifier")?;
+        if let Some(encoded) = verifier {
+            let bytes = STANDARD_NO_PAD
+                .decode(encoded)
+                .map_err(|_| QueueError::IncorrectPassphrase)?;
+            if decrypt_bytes(&key, &bytes).map_or(true, |value| value != VERIFIER) {
+                return Err(QueueError::IncorrectPassphrase);
+            }
+        } else {
+            let encrypted = encrypt_bytes(&key, VERIFIER)?;
+            self.set_meta("passphrase_verifier", &STANDARD_NO_PAD.encode(encrypted))?;
+        }
+        *self.key.lock() = Some(key);
+        Ok(())
+    }
+
+    pub fn is_unlocked(&self) -> bool {
+        self.key.lock().is_some()
+    }
+
+    pub fn enqueue(&self, envelope: &UploadEnvelope) -> Result<bool, QueueError> {
+        let plaintext = canonical::canonical_json(&serde_json::to_value(envelope)?);
+        let content_hash = hex::encode(sha2::Sha256::digest(&plaintext));
+        let key_guard = self.key.lock();
+        let key = key_guard.as_ref().ok_or(QueueError::Locked)?;
+        let encrypted = encrypt_bytes(key, &plaintext)?;
+        let (nonce, ciphertext) = encrypted.split_at(24);
+        let coalesce_key = (envelope.kind == DatasetKind::State).then(|| {
+            format!(
+                "{}:{}:{}:{}",
+                envelope.guild_key.as_str(),
+                envelope.installation_id,
+                envelope.dataset,
+                envelope.subject_id
+            )
+        });
+        let now = chrono::Utc::now().timestamp();
+        let connection = self.connection.lock();
+        let changed = if envelope.kind == DatasetKind::State {
+            connection.execute(
+                "INSERT INTO upload_queue(content_hash,coalesce_key,guild_key,dataset,kind,nonce,ciphertext,status,attempts,next_attempt_at,created_at,updated_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,'pending',0,0,?8,?8)
+                 ON CONFLICT(coalesce_key) DO UPDATE SET content_hash=excluded.content_hash,nonce=excluded.nonce,ciphertext=excluded.ciphertext,status='pending',attempts=0,next_attempt_at=0,last_error=NULL,updated_at=excluded.updated_at
+                 WHERE upload_queue.content_hash != excluded.content_hash",
+                params![content_hash, coalesce_key, envelope.guild_key.as_str(), envelope.dataset, kind_name(envelope.kind), nonce, ciphertext, now],
+            )?
+        } else {
+            connection.execute(
+                "INSERT OR IGNORE INTO upload_queue(content_hash,coalesce_key,guild_key,dataset,kind,nonce,ciphertext,status,attempts,next_attempt_at,created_at,updated_at)
+                 VALUES(?1,NULL,?2,?3,?4,?5,?6,'pending',0,0,?7,?7)",
+                params![content_hash, envelope.guild_key.as_str(), envelope.dataset, kind_name(envelope.kind), nonce, ciphertext, now],
+            )?
+        };
+        Ok(changed > 0)
+    }
+
+    pub fn next_ready(&self, limit: usize) -> Result<Vec<QueuedUpload>, QueueError> {
+        let key_guard = self.key.lock();
+        let key = key_guard.as_ref().ok_or(QueueError::Locked)?;
+        let connection = self.connection.lock();
+        let now = chrono::Utc::now().timestamp();
+        let mut statement = connection.prepare("SELECT id,nonce,ciphertext,attempts FROM upload_queue WHERE status IN ('pending','failed') AND next_attempt_at <= ?1 ORDER BY id LIMIT ?2")?;
+        let rows = statement.query_map(params![now, limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, u32>(3)?,
+            ))
+        })?;
+        let mut uploads = Vec::new();
+        for row in rows {
+            let (id, nonce, ciphertext, attempts) = row?;
+            let mut combined = nonce;
+            combined.extend_from_slice(&ciphertext);
+            let plaintext = decrypt_bytes(key, &combined)?;
+            uploads.push(QueuedUpload {
+                id,
+                envelope: serde_json::from_slice(&plaintext)?,
+                attempts,
+            });
+        }
+        for upload in &uploads {
+            connection.execute(
+                "UPDATE upload_queue SET status='uploading',updated_at=?2 WHERE id=?1",
+                params![upload.id, now],
+            )?;
+        }
+        Ok(uploads)
+    }
+
+    pub fn mark_complete(&self, id: i64) -> Result<(), QueueError> {
+        self.connection
+            .lock()
+            .execute("DELETE FROM upload_queue WHERE id=?1", [id])?;
+        Ok(())
+    }
+
+    pub fn mark_retry(
+        &self,
+        id: i64,
+        attempts: u32,
+        error: &str,
+        retry_after_seconds: Option<u64>,
+    ) -> Result<(), QueueError> {
+        let exponent = attempts.min(8);
+        let jitter = u64::from(OsRng.next_u32() % 7);
+        let delay = retry_after_seconds
+            .unwrap_or_else(|| 5_u64.saturating_mul(2_u64.pow(exponent)) + jitter)
+            .min(3600);
+        let now = chrono::Utc::now().timestamp();
+        self.connection.lock().execute("UPDATE upload_queue SET status='failed',attempts=attempts+1,next_attempt_at=?2,last_error=?3,updated_at=?4 WHERE id=?1", params![id, now + delay as i64, truncate_error(error), now])?;
+        Ok(())
+    }
+
+    pub fn recover_uploading(&self) -> Result<(), QueueError> {
+        self.connection.lock().execute(
+            "UPDATE upload_queue SET status='pending' WHERE status='uploading'",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn summary(&self) -> Result<QueueSummary, QueueError> {
+        self.connection.lock().query_row(
+            "SELECT COALESCE(SUM(status='pending'),0),COALESCE(SUM(status='uploading'),0),COALESCE(SUM(status='failed'),0),COALESCE(SUM(length(nonce)+length(ciphertext)),0) FROM upload_queue",
+            [], |row| Ok(QueueSummary { pending: row.get(0)?, uploading: row.get(1)?, failed: row.get(2)?, bytes_encrypted: row.get(3)? }))
+            .map_err(QueueError::from)
+    }
+
+    pub fn delete_all(&self) -> Result<(), QueueError> {
+        self.connection
+            .lock()
+            .execute("DELETE FROM upload_queue", [])?;
+        Ok(())
+    }
+
+    pub fn store_secure(&self, name: &str, value: &[u8]) -> Result<(), QueueError> {
+        let key_guard = self.key.lock();
+        let key = key_guard.as_ref().ok_or(QueueError::Locked)?;
+        let encrypted = encrypt_bytes(key, value)?;
+        let (nonce, ciphertext) = encrypted.split_at(24);
+        self.connection.lock().execute(
+            "INSERT INTO secure_meta(key,nonce,ciphertext) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET nonce=excluded.nonce,ciphertext=excluded.ciphertext",
+            params![name,nonce,ciphertext],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_secure(&self, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>, QueueError> {
+        let encrypted: Option<(Vec<u8>, Vec<u8>)> = self
+            .connection
+            .lock()
+            .query_row(
+                "SELECT nonce,ciphertext FROM secure_meta WHERE key=?1",
+                [name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((mut nonce, ciphertext)) = encrypted else {
+            return Ok(None);
+        };
+        nonce.extend_from_slice(&ciphertext);
+        let key_guard = self.key.lock();
+        let key = key_guard.as_ref().ok_or(QueueError::Locked)?;
+        Ok(Some(Zeroizing::new(decrypt_bytes(key, &nonce)?)))
+    }
+
+    pub fn delete_secure(&self, name: &str) -> Result<(), QueueError> {
+        self.connection
+            .lock()
+            .execute("DELETE FROM secure_meta WHERE key=?1", [name])?;
+        Ok(())
+    }
+
+    fn meta(&self, key: &str) -> Result<Option<String>, QueueError> {
+        self.connection
+            .lock()
+            .query_row("SELECT value FROM vault_meta WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(QueueError::from)
+    }
+
+    fn set_meta(&self, key: &str, value: &str) -> Result<(), QueueError> {
+        self.connection.lock().execute("INSERT INTO vault_meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value])?;
+        Ok(())
+    }
+}
+
+fn encrypt_bytes(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, QueueError> {
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let mut nonce = [0_u8; 24];
+    OsRng.fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(XNonce::from_slice(&nonce), plaintext)
+        .map_err(|_| QueueError::Encryption)?;
+    let mut combined = nonce.to_vec();
+    combined.extend_from_slice(&ciphertext);
+    Ok(combined)
+}
+
+fn decrypt_bytes(key: &[u8; 32], combined: &[u8]) -> Result<Vec<u8>, QueueError> {
+    if combined.len() < 24 {
+        return Err(QueueError::Encryption);
+    }
+    XChaCha20Poly1305::new(key.into())
+        .decrypt(XNonce::from_slice(&combined[..24]), &combined[24..])
+        .map_err(|_| QueueError::Encryption)
+}
+
+fn kind_name(kind: DatasetKind) -> &'static str {
+    match kind {
+        DatasetKind::State => "state",
+        DatasetKind::Events => "events",
+    }
+}
+fn truncate_error(value: &str) -> String {
+    value.chars().take(500).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::*;
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    fn envelope(sequence: u64, value: &str, kind: DatasetKind) -> UploadEnvelope {
+        let payload = serde_json::json!({"value":value});
+        UploadEnvelope {
+            schema_version: 1,
+            dataset: "roster".into(),
+            kind,
+            scope: "guild".into(),
+            subject_id: "guild".into(),
+            guild_key: GuildKey::Main,
+            guild: crate::guild::canonical(GuildKey::Main),
+            source_character: SourceCharacter {
+                guid: "Player-1".into(),
+                name: "Aria".into(),
+                realm: "Dalaran".into(),
+                realm_slug: "dalaran".into(),
+            },
+            installation_id: "install-1".into(),
+            protocol_version: "1.0".into(),
+            export_sequence: sequence,
+            captured_at: Utc::now(),
+            coverage: Coverage {
+                status: CoverageStatus::Complete,
+                reason_code: None,
+                observed_at: Utc::now(),
+                metadata: None,
+            },
+            permission_evidence: serde_json::json!({}),
+            payload_hash: canonical::sha256_hex(&payload),
+            payload,
+        }
+    }
+
+    fn store() -> Arc<QueueStore> {
+        let directory = tempdir().unwrap().keep();
+        let store = QueueStore::open(&directory.join("queue.sqlite3")).unwrap();
+        *store.key.lock() = Some(Zeroizing::new([7_u8; 32]));
+        store
+    }
+
+    #[test]
+    fn state_is_encrypted_and_coalesced() {
+        let store = store();
+        assert!(store
+            .enqueue(&envelope(1, "old", DatasetKind::State))
+            .unwrap());
+        assert!(store
+            .enqueue(&envelope(2, "new", DatasetKind::State))
+            .unwrap());
+        assert_eq!(store.summary().unwrap().pending, 1);
+        let next = store.next_ready(10).unwrap();
+        assert_eq!(next[0].envelope.payload["value"], "new");
+        let connection = store.connection.lock();
+        let ciphertext: Vec<u8> = connection
+            .query_row("SELECT ciphertext FROM upload_queue", [], |row| row.get(0))
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&ciphertext).contains("new"));
+    }
+
+    #[test]
+    fn event_ranges_are_not_coalesced_but_exact_duplicates_are_idempotent() {
+        let store = store();
+        let event = envelope(1, "event", DatasetKind::Events);
+        assert!(store.enqueue(&event).unwrap());
+        assert!(!store.enqueue(&event).unwrap());
+        let mut second = envelope(2, "other", DatasetKind::Events);
+        second.subject_id = "event-2".into();
+        assert!(store.enqueue(&second).unwrap());
+        assert_eq!(store.summary().unwrap().pending, 2);
+    }
+
+    #[test]
+    fn passphrase_vault_rejects_a_different_passphrase() {
+        let directory = tempdir().unwrap().keep();
+        let path = directory.join("queue.sqlite3");
+        let first = QueueStore::open(&path).unwrap();
+        first
+            .unlock_with_passphrase("the correct local test passphrase")
+            .unwrap();
+        first.store_secure("test", b"secret").unwrap();
+        drop(first);
+
+        let reopened = QueueStore::open(&path).unwrap();
+        assert!(matches!(
+            reopened.unlock_with_passphrase("an incorrect test passphrase"),
+            Err(QueueError::IncorrectPassphrase)
+        ));
+        reopened
+            .unlock_with_passphrase("the correct local test passphrase")
+            .unwrap();
+        assert_eq!(
+            reopened.load_secure("test").unwrap().unwrap().as_slice(),
+            b"secret"
+        );
+    }
+}

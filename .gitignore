@@ -1,0 +1,45 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+updater-private-key*
+
+# WoW data must never be committed
+WTF/
+SavedVariables/
+*.savedvariables.lua
+*.sv.lua
+
+# Desktop dependencies and build output
+desktop/node_modules/
+desktop/dist/
+desktop/.vite/
+desktop/src-tauri/target/
+desktop/coverage/
+release-staging/
+
+# Test and editor output
+/coverage/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Release binaries are distributed through GitHub Releases. The local
+# installer directory is populated by the release download script.
+installer/**/*.exe
+installer/**/*.msi
+installer/**/*.dmg
+installer/**/*.deb
+installer/**/*.rpm
+installer/**/*.AppImage
+installer/**/*.zip
+installer/**/*.sig
+installer/**/*.tar.gz
