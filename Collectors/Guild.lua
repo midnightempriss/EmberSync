@@ -16,6 +16,7 @@ local Guild = {
         "GUILD_EVENT_LOG_UPDATE",
     },
     debounce = 1,
+    minInterval = 15,
 }
 
 local function collectRanks()
@@ -45,6 +46,7 @@ local function collectRoster(canViewOfficerNote)
     end
     local total, online, onlineAndMobile = _G.GetNumGuildMembers()
     for index = 1, (total or 0) do
+        Util.Cooperate(index, 30)
         local name, rankName, rankIndex, level, className, zone, publicNote, officerNote,
             isOnline, status, classFile, achievementPoints, achievementRank, isMobile,
             canScrollOfResurrection, reputationStanding, guid = _G.GetGuildRosterInfo(index)
@@ -78,6 +80,7 @@ local function collectNews()
         return news
     end
     for index = 1, (_G.GetNumGuildNews() or 0) do
+        Util.Cooperate(index, 25)
         local ok, info = pcall(_G.C_GuildInfo.GetGuildNewsInfo, index)
         if ok and info then
             news[#news + 1] = Util.Sanitize(info)
@@ -107,6 +110,7 @@ local function collectEventLog()
     local events = {}
     if type(_G.GetNumGuildEvents) == "function" and type(_G.GetGuildEventInfo) == "function" then
         for index = 1, math.min(_G.GetNumGuildEvents() or 0, 200) do
+            Util.Cooperate(index, 25)
             local eventType, player1, player2, rank, year, month, day, hour = _G.GetGuildEventInfo(index)
             events[#events + 1] = {
                 type = eventType,

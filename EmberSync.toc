@@ -2,7 +2,7 @@
 ## Title: EmberSync
 ## Notes: Private game and guild data sync for Raining Embers.
 ## Author: Raining Embers
-## Version: 0.1.0
+## Version: 0.1.1
 ## SavedVariables: EmberSyncDB
 ## IconTexture: Interface\Icons\INV_Elemental_Primal_Fire
 ## AddonCompartmentFunc: EmberSync_OnAddonCompartmentClick

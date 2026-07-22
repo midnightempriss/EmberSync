@@ -34,6 +34,7 @@ pub enum ApiError {
     Response {
         status: u16,
         message: String,
+        code: Option<String>,
         retry_after: Option<u64>,
     },
     #[error("website returned an invalid response")]
@@ -44,6 +45,8 @@ pub enum ApiError {
     PairingExpired,
     #[error("pairing was denied")]
     PairingDenied,
+    #[error("upload deferred safely: {0}")]
+    UploadDeferred(String),
 }
 
 impl ApiError {
@@ -51,6 +54,29 @@ impl ApiError {
         match self {
             Self::Response { retry_after, .. } => *retry_after,
             _ => None,
+        }
+    }
+
+    fn blocks_queue_for_authorization(&self) -> bool {
+        match self {
+            Self::Response {
+                status,
+                message,
+                code,
+                ..
+            } => {
+                matches!(
+                    code.as_deref(),
+                    Some(
+                        "ownership_reverification_required"
+                            | "account_not_eligible"
+                            | "guild_membership_required"
+                            | "device_revoked"
+                            | "device_not_paired"
+                    )
+                ) || (*status == 403 && message.contains("Sign in with Battle.net again"))
+            }
+            _ => false,
         }
     }
 }
@@ -223,18 +249,18 @@ impl ApiClient {
     pub async fn process_queue(&self, paired: &PairedDeviceConfig) -> Result<usize, ApiError> {
         let uploads = self.queue.next_ready(16)?;
         let mut complete = 0;
+        let mut first_deferred_error: Option<String> = None;
         for upload in uploads {
             if !paired
                 .scopes
                 .iter()
                 .any(|scope| scope == upload.envelope.guild_key.as_str())
             {
-                self.queue.mark_retry(
-                    upload.id,
-                    upload.attempts,
-                    "device scope does not include this guild",
-                    None,
-                )?;
+                self.queue
+                    .mark_action_required(upload.id, "device scope does not include this guild")?;
+                first_deferred_error.get_or_insert_with(|| {
+                    "This device is not paired for one of the queued guild scopes.".into()
+                });
                 continue;
             }
             match self.upload_one(&paired.device_id, &upload.envelope).await {
@@ -243,6 +269,11 @@ impl ApiClient {
                     complete += 1;
                 }
                 Err(error) => {
+                    if error.blocks_queue_for_authorization() {
+                        self.queue.mark_authorization_required(&error.to_string())?;
+                        return Err(error);
+                    }
+                    first_deferred_error.get_or_insert_with(|| error.to_string());
                     self.queue.mark_retry(
                         upload.id,
                         upload.attempts,
@@ -250,6 +281,11 @@ impl ApiClient {
                         error.retry_after(),
                     )?;
                 }
+            }
+        }
+        if complete == 0 {
+            if let Some(error) = first_deferred_error {
+                return Err(ApiError::UploadDeferred(error));
             }
         }
         Ok(complete)
@@ -412,6 +448,17 @@ async fn response_error(response: reqwest::Response) -> ApiError {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok());
     let value = response.json::<Value>().await.unwrap_or(Value::Null);
+    let code = value
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 100
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+        .map(str::to_owned);
     let message = value
         .get("message")
         .or_else(|| value.get("error"))
@@ -423,6 +470,7 @@ async fn response_error(response: reqwest::Response) -> ApiError {
     ApiError::Response {
         status: status.as_u16(),
         message,
+        code,
         retry_after,
     }
 }
@@ -482,5 +530,25 @@ mod tests {
             ),
             format!("EMBERSYNC-SIGN-V1\nPOST\n{path}\n{timestamp}\n{nonce}\n{hash}")
         );
+    }
+
+    #[test]
+    fn fresh_battlenet_proof_failure_blocks_automatic_queue_retries() {
+        let error = ApiError::Response {
+            status: 403,
+            message: "Sign in with Battle.net again before pairing or uploading with EmberSync."
+                .into(),
+            code: Some("ownership_reverification_required".into()),
+            retry_after: None,
+        };
+        assert!(error.blocks_queue_for_authorization());
+
+        let provider_error = ApiError::Response {
+            status: 503,
+            message: "Current membership could not be verified.".into(),
+            code: Some("membership_verification_unavailable".into()),
+            retry_after: Some(60),
+        };
+        assert!(!provider_error.blocks_queue_for_authorization());
     }
 }

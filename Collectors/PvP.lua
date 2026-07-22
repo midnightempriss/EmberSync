@@ -14,6 +14,7 @@ local PvP = {
         "PLAYER_PVP_KILLS_CHANGED",
     },
     debounce = 1,
+    minInterval = 15,
 }
 
 local function collectRated()

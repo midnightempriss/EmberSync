@@ -75,6 +75,45 @@ pub fn discover_saved_variables(roots: &[PathBuf]) -> Vec<PathBuf> {
     found.into_iter().collect()
 }
 
+/// Convert any useful selection inside a Retail installation into the narrowest
+/// stable directory that contains account SavedVariables. This lets someone
+/// select World of Warcraft, _retail_, WTF, Interface/AddOns, or the EmberSync
+/// addon itself without making the watcher monitor game data and cache files.
+pub fn normalize_configured_root(root: &Path) -> PathBuf {
+    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
+    for ancestor in canonical.ancestors() {
+        if ancestor
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("WTF"))
+        {
+            return ancestor.to_path_buf();
+        }
+        if ancestor
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("_retail_"))
+        {
+            let wtf = ancestor.join("WTF");
+            return if wtf.exists() {
+                wtf
+            } else {
+                ancestor.to_path_buf()
+            };
+        }
+    }
+
+    for ancestor in canonical.ancestors() {
+        for suffix in [PathBuf::from("_retail_").join("WTF"), PathBuf::from("WTF")] {
+            let candidate = ancestor.join(suffix);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+
+    canonical
+}
+
 fn normalize_scan_root(root: &Path) -> PathBuf {
     if root
         .file_name()
@@ -198,5 +237,33 @@ mod tests {
         let file = root.path().join("EmberSync.lua");
         fs::write(&file, "EmberSyncDB={}").unwrap();
         assert_eq!(read_stable(&file).unwrap(), b"EmberSyncDB={}");
+    }
+
+    #[test]
+    fn addon_folder_selection_normalizes_to_retail_wtf() {
+        let root = tempdir().unwrap();
+        let retail = root.path().join("World of Warcraft/_retail_");
+        let addon = retail.join("Interface/AddOns/EmberSync");
+        let wtf = retail.join("WTF");
+        fs::create_dir_all(&addon).unwrap();
+        fs::create_dir_all(&wtf).unwrap();
+
+        assert_eq!(
+            normalize_configured_root(&addon),
+            wtf.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn install_folder_selection_normalizes_to_retail_wtf() {
+        let root = tempdir().unwrap();
+        let install = root.path().join("World of Warcraft");
+        let wtf = install.join("_retail_/WTF");
+        fs::create_dir_all(&wtf).unwrap();
+
+        assert_eq!(
+            normalize_configured_root(&install),
+            wtf.canonicalize().unwrap()
+        );
     }
 }

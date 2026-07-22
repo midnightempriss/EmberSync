@@ -66,4 +66,5 @@ Installation and release-maintainer instructions live in
 
 ## Status
 
-Version `0.1.0` is the initial guild-locked release.
+Version `0.1.1` adds frame-sliced collection, full guild-neighborhood and
+Endeavor requests, native WoW-folder browsing, and actionable upload recovery.

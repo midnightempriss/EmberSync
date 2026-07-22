@@ -226,6 +226,8 @@ pub struct QueueSummary {
     pub pending: u64,
     pub uploading: u64,
     pub failed: u64,
+    pub action_required: u64,
+    pub authorization_required: bool,
     pub bytes_encrypted: u64,
 }
 

@@ -18,6 +18,8 @@ local Collections = {
         "NEW_HOUSING_ITEM_ACQUIRED",
     },
     debounce = 2,
+    minInterval = 120,
+    expensive = true,
 }
 
 local function collectMounts()
@@ -27,7 +29,8 @@ local function collectMounts()
         return mounts, false
     end
     local ids = api.GetMountIDs() or {}
-    for _, mountID in ipairs(ids) do
+    for index, mountID in ipairs(ids) do
+        Util.Cooperate(index, 30)
         local name, spellID, icon, active, usable, sourceType, favorite, factionSpecific,
             faction, hidden, collected, mountIDReturned = api.GetMountInfoByID(mountID)
         if collected then
@@ -57,6 +60,7 @@ local function collectPets()
     end
     local count = api.GetNumPets() or 0
     for index = 1, count do
+        Util.Cooperate(index, 30)
         local petID, speciesID, owned, customName, level, favorite, battlePet, icon, petType,
             companionID, tooltipSource, description, tradable, unique, obtainable, displayID = api.GetPetInfoByIndex(index)
         if owned then
@@ -89,6 +93,7 @@ local function collectToys()
         return toys, false
     end
     for index = 1, (api.GetNumToys() or 0) do
+        Util.Cooperate(index, 30)
         local itemID = api.GetToyFromIndex(index)
         if itemID and (type(_G.PlayerHasToy) ~= "function" or _G.PlayerHasToy(itemID)) then
             local name, icon, favorite, hasFanfare, itemQuality = api.GetToyInfo(itemID)
@@ -111,6 +116,7 @@ local function collectTitles()
         return titles, false
     end
     for titleID = 1, (_G.GetNumTitles() or 0) do
+        Util.Cooperate(titleID, 40)
         if type(_G.IsTitleKnown) == "function" and _G.IsTitleKnown(titleID) then
             titles[#titles + 1] = {
                 id = titleID,

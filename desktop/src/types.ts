@@ -16,6 +16,8 @@ export interface QueueSummary {
   pending: number;
   uploading: number;
   failed: number;
+  actionRequired?: number;
+  authorizationRequired?: boolean;
   bytesEncrypted: number;
 }
 

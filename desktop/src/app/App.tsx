@@ -25,7 +25,9 @@ export function App() {
   return (
     <AppShell activeScreen={screen} status={desktop.status} onNavigate={setScreen}>
       {desktop.error ? <ErrorBanner message={desktop.error} onRetry={refresh} /> : null}
-      {locked ? (
+      {screen === "settings" ? (
+        <SettingsScreen status={desktop.status} onRefresh={refresh} />
+      ) : locked ? (
         <LockedState status={desktop.status} onRefresh={refresh} />
       ) : (
         <>
@@ -34,7 +36,6 @@ export function App() {
           {screen === "queue" ? <QueueScreen status={desktop.status} onRefresh={refresh} /> : null}
           {screen === "privacy" ? <PrivacyScreen /> : null}
           {screen === "diagnostics" ? <DiagnosticsScreen events={desktop.diagnostics} status={desktop.status} /> : null}
-          {screen === "settings" ? <SettingsScreen status={desktop.status} onRefresh={refresh} /> : null}
         </>
       )}
     </AppShell>

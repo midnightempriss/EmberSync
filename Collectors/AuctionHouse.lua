@@ -15,6 +15,7 @@ local AuctionHouse = {
     },
     isOpen = false,
     debounce = 1,
+    minInterval = 3,
 }
 
 function AuctionHouse:HandleEvent(_, event)

@@ -115,7 +115,7 @@ local function datasetStorageKey(dataset, scope, subjectId)
     return dataset .. ":" .. tostring(subjectId or "unknown")
 end
 
-function Database:CommitDataset(dataset, scope, subjectId, payload, coverage, permissionEvidence)
+function Database:CommitDataset(dataset, scope, subjectId, payload, coverage, permissionEvidence, options)
     if not GuildLock:IsAuthorized() then
         return false, "not_authorized"
     end
@@ -155,10 +155,24 @@ function Database:CommitDataset(dataset, scope, subjectId, payload, coverage, pe
     end
     coverage.observedAt = coverage.observedAt or Util.Now()
 
+    options = type(options) == "table" and options or {}
+    local key = datasetStorageKey(dataset, scope, subjectId)
+    local sourceCharacter = Util.GetPlayerIdentity(identity.rankIndex)
+    local existing = export.datasets[key]
+    local heartbeatSeconds = options.heartbeatSeconds or Constants.COLLECTOR_HEARTBEAT_SECONDS
+    local existingAge = type(existing) == "table" and Util.Now() - (existing.capturedAt or 0) or math.huge
+    local coverageMatches = type(existing) == "table" and type(existing.coverage) == "table"
+        and existing.coverage.status == coverage.status and existing.coverage.reason == coverage.reason
+    local sourceMatches = type(existing) == "table" and type(existing.sourceCharacter) == "table"
+        and existing.sourceCharacter.id == sourceCharacter.id
+    if not options.force and existingAge >= 0 and existingAge < heartbeatSeconds
+        and coverageMatches and sourceMatches and Util.DeepEqual(existing.payload, sanitized) then
+        return true, key, "unchanged"
+    end
+
     export.sequence = (export.sequence or 0) + 1
     export.capturedAt = Util.Now()
-    export.sourceCharacter = Util.GetPlayerIdentity(identity.rankIndex)
-    local key = datasetStorageKey(dataset, scope, subjectId)
+    export.sourceCharacter = sourceCharacter
     local envelope = {
         schemaVersion = Constants.SCHEMA_VERSION,
         dataset = dataset,
@@ -187,7 +201,7 @@ function Database:CommitDataset(dataset, scope, subjectId, payload, coverage, pe
 
     local db = _G.EmberSyncDB
     db.updatedAt = export.capturedAt
-    if export.sequence % 5 == 0 then
+    if export.sequence % Constants.DATABASE_SIZE_CHECK_SEQUENCE_INTERVAL == 0 then
         self:EnforceSizeCap()
     end
     EmberSync:Emit("DATABASE_UPDATED", identity.key, key, envelope)
@@ -255,7 +269,14 @@ end
 
 function Database:EnforceSizeCap()
     local db = _G.EmberSyncDB
-    if type(db) ~= "table" or Util.EstimateSize(db) <= Constants.SOFT_DATABASE_BYTES then
+    if type(db) ~= "table" then
+        return
+    end
+    db.meta = type(db.meta) == "table" and db.meta or {}
+    local estimatedBytes = Util.EstimateSize(db)
+    db.meta.estimatedBytes = estimatedBytes
+    db.meta.estimatedBytesAt = Util.Now()
+    if estimatedBytes <= Constants.SOFT_DATABASE_BYTES then
         return
     end
     for _, export in pairs(db.exports or {}) do
@@ -275,7 +296,10 @@ function Database:EnforceSizeCap()
             end
         end
     end
-    if Util.EstimateSize(db) <= Constants.SOFT_DATABASE_BYTES then
+    estimatedBytes = Util.EstimateSize(db)
+    db.meta.estimatedBytes = estimatedBytes
+    db.meta.estimatedBytesAt = Util.Now()
+    if estimatedBytes <= Constants.SOFT_DATABASE_BYTES then
         return
     end
 
@@ -297,7 +321,8 @@ function Database:EnforceSizeCap()
         return left.capturedAt < right.capturedAt
     end)
     for _, candidate in ipairs(candidates) do
-        if Util.EstimateSize(db) <= Constants.SOFT_DATABASE_BYTES then
+        estimatedBytes = Util.EstimateSize(db)
+        if estimatedBytes <= Constants.SOFT_DATABASE_BYTES then
             break
         end
         local export = db.exports[candidate.guildKey]
@@ -309,6 +334,16 @@ function Database:EnforceSizeCap()
             })
         end
     end
+    db.meta.estimatedBytes = Util.EstimateSize(db)
+    db.meta.estimatedBytesAt = Util.Now()
+end
+
+function Database:GetEstimatedSize()
+    local db = _G.EmberSyncDB
+    if type(db) ~= "table" or type(db.meta) ~= "table" then
+        return nil
+    end
+    return db.meta.estimatedBytes, db.meta.estimatedBytesAt
 end
 
 function Database:SetSetting(path, value)

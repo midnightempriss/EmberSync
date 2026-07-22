@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CoverageRow, DesktopStatus, DiagnosticEvent, PairingStart } from "../types";
 
@@ -13,7 +14,7 @@ const browserFallbackStatus: DesktopStatus = {
   watcherRunning: false,
   discoveredFiles: 0,
   guilds: [],
-  queue: { pending: 0, uploading: 0, failed: 0, bytesEncrypted: 0 },
+  queue: { pending: 0, uploading: 0, failed: 0, actionRequired: 0, authorizationRequired: false, bytesEncrypted: 0 },
   roots: [],
   message: "Launch EmberSync as a desktop app to scan SavedVariables.",
 };
@@ -40,6 +41,17 @@ export async function getDiagnostics(): Promise<DiagnosticEvent[]> {
 
 export async function addWowRoot(path: string): Promise<DesktopStatus> {
   return invoke<DesktopStatus>("add_wow_root", { path });
+}
+
+export async function browseForWowRoot(defaultPath?: string): Promise<string | null> {
+  if (!inTauri()) return null;
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    defaultPath,
+    title: "Choose your World of Warcraft or EmberSync folder",
+  });
+  return Array.isArray(selected) ? selected[0] ?? null : selected;
 }
 
 export async function scanNow(): Promise<DesktopStatus> {

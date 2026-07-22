@@ -15,6 +15,8 @@ local Calendar = {
         "CALENDAR_CLOSE_EVENT",
     },
     debounce = 1,
+    minInterval = 30,
+    expensive = true,
     openedEvent = nil,
 }
 
@@ -56,15 +58,20 @@ function Calendar:Collect(context)
 
     local events = {}
     local months = {}
+    local workItems = 0
     for monthOffset = -1, 12 do
         local ok, monthInfo = pcall(api.GetMonthInfo, monthOffset)
         if ok and type(monthInfo) == "table" then
             months[#months + 1] = Util.Sanitize(monthInfo)
             local numberOfDays = math.min(31, tonumber(monthInfo.numDays) or 31)
             for day = 1, numberOfDays do
+                workItems = workItems + 1
+                Util.Cooperate(workItems, 20)
                 local countOk, count = pcall(api.GetNumDayEvents, monthOffset, day)
                 if countOk then
                     for eventIndex = 1, math.min(tonumber(count) or 0, 100) do
+                        workItems = workItems + 1
+                        Util.Cooperate(workItems, 20)
                         local eventOk, event = pcall(api.GetDayEvent, monthOffset, day, eventIndex)
                         if eventOk and event then
                             events[#events + 1] = {

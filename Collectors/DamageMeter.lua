@@ -7,12 +7,11 @@ local DamageMeter = {
     name = "damage_meter",
     scope = "character",
     events = {
-        "DAMAGE_METER_COMBAT_SESSION_UPDATED",
-        "DAMAGE_METER_CURRENT_SESSION_UPDATED",
         "DAMAGE_METER_RESET",
         "PLAYER_REGEN_ENABLED",
     },
     debounce = 2,
+    minInterval = 15,
 }
 
 function DamageMeter:Collect(context)

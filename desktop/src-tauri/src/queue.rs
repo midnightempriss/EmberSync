@@ -19,6 +19,11 @@ use zeroize::Zeroizing;
 const KEYRING_SERVICE: &str = "org.rainingembers.embersync";
 const KEYRING_USER: &str = "local-queue-master-key-v1";
 const VERIFIER: &[u8] = b"EmberSync passphrase vault v1";
+const AUTHORIZATION_REQUIRED_META: &str = "upload_authorization_required";
+const AUTHORIZATION_REQUIRED_PREFIX: &str = "authorization required: ";
+const NEVER_RETRY_AT: i64 = i64::MAX;
+const LEGACY_REAUTH_ERROR: &str =
+    "%Sign in with Battle.net again before pairing or uploading with EmberSync.%";
 
 #[derive(Debug, Error)]
 pub enum QueueError {
@@ -86,6 +91,7 @@ impl QueueStore {
              );
              CREATE INDEX IF NOT EXISTS upload_queue_ready ON upload_queue(status, next_attempt_at, id);"
         )?;
+        migrate_legacy_authorization_failures(&connection)?;
         Ok(Arc::new(Self {
             connection: Mutex::new(connection),
             key: Mutex::new(None),
@@ -184,19 +190,34 @@ impl QueueStore {
         });
         let now = chrono::Utc::now().timestamp();
         let connection = self.connection.lock();
+        let authorization_error: Option<String> = connection
+            .query_row(
+                "SELECT value FROM vault_meta WHERE key=?1",
+                [AUTHORIZATION_REQUIRED_META],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let (status, next_attempt_at, last_error) = match authorization_error {
+            Some(error) => (
+                "failed",
+                NEVER_RETRY_AT,
+                Some(format_authorization_error(&error)),
+            ),
+            None => ("pending", 0, None),
+        };
         let changed = if envelope.kind == DatasetKind::State {
             connection.execute(
-                "INSERT INTO upload_queue(content_hash,coalesce_key,guild_key,dataset,kind,nonce,ciphertext,status,attempts,next_attempt_at,created_at,updated_at)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,'pending',0,0,?8,?8)
-                 ON CONFLICT(coalesce_key) DO UPDATE SET content_hash=excluded.content_hash,nonce=excluded.nonce,ciphertext=excluded.ciphertext,status='pending',attempts=0,next_attempt_at=0,last_error=NULL,updated_at=excluded.updated_at
+                "INSERT INTO upload_queue(content_hash,coalesce_key,guild_key,dataset,kind,nonce,ciphertext,status,attempts,next_attempt_at,last_error,created_at,updated_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,?9,?10,?11,?11)
+                 ON CONFLICT(coalesce_key) DO UPDATE SET content_hash=excluded.content_hash,nonce=excluded.nonce,ciphertext=excluded.ciphertext,status=excluded.status,attempts=0,next_attempt_at=excluded.next_attempt_at,last_error=excluded.last_error,updated_at=excluded.updated_at
                  WHERE upload_queue.content_hash != excluded.content_hash",
-                params![content_hash, coalesce_key, envelope.guild_key.as_str(), envelope.dataset, kind_name(envelope.kind), nonce, ciphertext, now],
+                params![content_hash, coalesce_key, envelope.guild_key.as_str(), envelope.dataset, kind_name(envelope.kind), nonce, ciphertext, status, next_attempt_at, last_error, now],
             )?
         } else {
             connection.execute(
-                "INSERT OR IGNORE INTO upload_queue(content_hash,coalesce_key,guild_key,dataset,kind,nonce,ciphertext,status,attempts,next_attempt_at,created_at,updated_at)
-                 VALUES(?1,NULL,?2,?3,?4,?5,?6,'pending',0,0,?7,?7)",
-                params![content_hash, envelope.guild_key.as_str(), envelope.dataset, kind_name(envelope.kind), nonce, ciphertext, now],
+                "INSERT OR IGNORE INTO upload_queue(content_hash,coalesce_key,guild_key,dataset,kind,nonce,ciphertext,status,attempts,next_attempt_at,last_error,created_at,updated_at)
+                 VALUES(?1,NULL,?2,?3,?4,?5,?6,?7,0,?8,?9,?10,?10)",
+                params![content_hash, envelope.guild_key.as_str(), envelope.dataset, kind_name(envelope.kind), nonce, ciphertext, status, next_attempt_at, last_error, now],
             )?
         };
         Ok(changed > 0)
@@ -207,15 +228,17 @@ impl QueueStore {
         let key = key_guard.as_ref().ok_or(QueueError::Locked)?;
         let connection = self.connection.lock();
         let now = chrono::Utc::now().timestamp();
-        let mut statement = connection.prepare("SELECT id,nonce,ciphertext,attempts FROM upload_queue WHERE status IN ('pending','failed') AND next_attempt_at <= ?1 ORDER BY id LIMIT ?2")?;
-        let rows = statement.query_map(params![now, limit as i64], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-                row.get::<_, u32>(3)?,
-            ))
-        })?;
+        let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
+        let mut statement = connection.prepare("SELECT id,nonce,ciphertext,attempts FROM upload_queue WHERE (status='pending' OR (status='failed' AND (last_error IS NULL OR last_error NOT LIKE ?3))) AND next_attempt_at <= ?1 ORDER BY id LIMIT ?2")?;
+        let rows =
+            statement.query_map(params![now, limit as i64, authorization_pattern], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, u32>(3)?,
+                ))
+            })?;
         let mut uploads = Vec::new();
         for row in rows {
             let (id, nonce, ciphertext, attempts) = row?;
@@ -261,25 +284,96 @@ impl QueueStore {
         Ok(())
     }
 
-    pub fn recover_uploading(&self) -> Result<(), QueueError> {
+    pub fn mark_action_required(&self, id: i64, error: &str) -> Result<(), QueueError> {
+        let now = chrono::Utc::now().timestamp();
         self.connection.lock().execute(
-            "UPDATE upload_queue SET status='pending' WHERE status='uploading'",
-            [],
+            "UPDATE upload_queue SET status='failed',attempts=attempts+1,next_attempt_at=?2,last_error=?3,updated_at=?4 WHERE id=?1",
+            params![id, NEVER_RETRY_AT, format_authorization_error(error), now],
         )?;
         Ok(())
     }
 
+    /// Pauses the entire queue after a device-wide website authorization failure.
+    /// Newly ingested data inherits this fail-closed state until a person explicitly
+    /// retries after completing Battle.net verification.
+    pub fn mark_authorization_required(&self, error: &str) -> Result<(), QueueError> {
+        let now = chrono::Utc::now().timestamp();
+        let safe_error = truncate_error(error);
+        let stored_error = format_authorization_error(&safe_error);
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO vault_meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![AUTHORIZATION_REQUIRED_META, safe_error],
+        )?;
+        transaction.execute(
+            "UPDATE upload_queue SET status='failed',next_attempt_at=?1,last_error=?2,updated_at=?3",
+            params![NEVER_RETRY_AT, stored_error, now],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Called only for a user-initiated retry or after a newly approved pairing.
+    pub fn release_authorization_required(&self) -> Result<usize, QueueError> {
+        let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM vault_meta WHERE key=?1",
+            [AUTHORIZATION_REQUIRED_META],
+        )?;
+        let changed = transaction.execute(
+            "UPDATE upload_queue SET status='pending',attempts=0,next_attempt_at=0,last_error=NULL WHERE status='failed' AND last_error LIKE ?1",
+            [authorization_pattern],
+        )?;
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    pub fn recover_uploading(&self) -> Result<(), QueueError> {
+        let connection = self.connection.lock();
+        let authorization_error: Option<String> = connection
+            .query_row(
+                "SELECT value FROM vault_meta WHERE key=?1",
+                [AUTHORIZATION_REQUIRED_META],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match authorization_error {
+            Some(error) => {
+                connection.execute(
+                    "UPDATE upload_queue SET status='failed',next_attempt_at=?1,last_error=?2 WHERE status='uploading'",
+                    params![NEVER_RETRY_AT, format_authorization_error(&error)],
+                )?;
+            }
+            None => {
+                connection.execute(
+                    "UPDATE upload_queue SET status='pending' WHERE status='uploading'",
+                    [],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn summary(&self) -> Result<QueueSummary, QueueError> {
+        let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
         self.connection.lock().query_row(
-            "SELECT COALESCE(SUM(status='pending'),0),COALESCE(SUM(status='uploading'),0),COALESCE(SUM(status='failed'),0),COALESCE(SUM(length(nonce)+length(ciphertext)),0) FROM upload_queue",
-            [], |row| Ok(QueueSummary { pending: row.get(0)?, uploading: row.get(1)?, failed: row.get(2)?, bytes_encrypted: row.get(3)? }))
+            "SELECT COALESCE(SUM(status='pending'),0),COALESCE(SUM(status='uploading'),0),COALESCE(SUM(status='failed' AND (last_error IS NULL OR last_error NOT LIKE ?1)),0),COALESCE(SUM(status='failed' AND last_error LIKE ?1),0),COALESCE(SUM(length(nonce)+length(ciphertext)),0),EXISTS(SELECT 1 FROM vault_meta WHERE key=?2) FROM upload_queue",
+            params![authorization_pattern, AUTHORIZATION_REQUIRED_META], |row| Ok(QueueSummary { pending: row.get(0)?, uploading: row.get(1)?, failed: row.get(2)?, action_required: row.get(3)?, bytes_encrypted: row.get(4)?, authorization_required: row.get(5)? }))
             .map_err(QueueError::from)
     }
 
     pub fn delete_all(&self) -> Result<(), QueueError> {
-        self.connection
-            .lock()
-            .execute("DELETE FROM upload_queue", [])?;
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute("DELETE FROM upload_queue", [])?;
+        transaction.execute(
+            "DELETE FROM vault_meta WHERE key=?1",
+            [AUTHORIZATION_REQUIRED_META],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -366,6 +460,35 @@ fn kind_name(kind: DatasetKind) -> &'static str {
 }
 fn truncate_error(value: &str) -> String {
     value.chars().take(500).collect()
+}
+
+fn format_authorization_error(value: &str) -> String {
+    format!("{AUTHORIZATION_REQUIRED_PREFIX}{}", truncate_error(value))
+}
+
+fn migrate_legacy_authorization_failures(connection: &Connection) -> Result<(), QueueError> {
+    let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
+    let legacy_error: Option<String> = connection
+        .query_row(
+            "SELECT last_error FROM upload_queue WHERE status='failed' AND last_error LIKE ?1 AND last_error NOT LIKE ?2 LIMIT 1",
+            params![LEGACY_REAUTH_ERROR, authorization_pattern],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(error) = legacy_error else {
+        return Ok(());
+    };
+    let now = chrono::Utc::now().timestamp();
+    let stored_error = format_authorization_error(&error);
+    connection.execute(
+        "INSERT INTO vault_meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![AUTHORIZATION_REQUIRED_META, truncate_error(&error)],
+    )?;
+    connection.execute(
+        "UPDATE upload_queue SET status='failed',next_attempt_at=?1,last_error=?2,updated_at=?3",
+        params![NEVER_RETRY_AT, stored_error, now],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -468,5 +591,73 @@ mod tests {
             reopened.load_secure("test").unwrap().unwrap().as_slice(),
             b"secret"
         );
+    }
+
+    #[test]
+    fn authorization_failure_pauses_existing_and_new_uploads_until_manual_release() {
+        let store = store();
+        assert!(store
+            .enqueue(&envelope(1, "first", DatasetKind::State))
+            .unwrap());
+        store
+            .mark_authorization_required("fresh Battle.net verification is required")
+            .unwrap();
+        let summary = store.summary().unwrap();
+        assert_eq!(summary.pending, 0);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.action_required, 1);
+        assert!(store.next_ready(10).unwrap().is_empty());
+
+        assert!(store
+            .enqueue(&envelope(2, "newer", DatasetKind::State))
+            .unwrap());
+        let mut event = envelope(3, "event", DatasetKind::Events);
+        event.subject_id = "event-3".into();
+        assert!(store.enqueue(&event).unwrap());
+        assert_eq!(store.summary().unwrap().action_required, 2);
+        assert!(store.next_ready(10).unwrap().is_empty());
+
+        assert_eq!(store.release_authorization_required().unwrap(), 2);
+        let summary = store.summary().unwrap();
+        assert_eq!(summary.action_required, 0);
+        assert_eq!(summary.pending, 2);
+        assert_eq!(store.next_ready(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn legacy_battlenet_reauth_failures_are_migrated_to_action_required() {
+        let store = store();
+        assert!(store
+            .enqueue(&envelope(1, "first", DatasetKind::State))
+            .unwrap());
+        {
+            let connection = store.connection.lock();
+            connection
+                .execute(
+                    "UPDATE upload_queue SET status='failed',last_error=?1",
+                    ["website returned 403: Sign in with Battle.net again before pairing or uploading with EmberSync."],
+                )
+                .unwrap();
+            migrate_legacy_authorization_failures(&connection).unwrap();
+        }
+        assert_eq!(store.summary().unwrap().action_required, 1);
+        assert!(store.next_ready(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_local_queue_data_also_clears_the_authorization_gate() {
+        let store = store();
+        assert!(store
+            .enqueue(&envelope(1, "first", DatasetKind::State))
+            .unwrap());
+        store
+            .mark_authorization_required("fresh Battle.net verification is required")
+            .unwrap();
+
+        store.delete_all().unwrap();
+
+        let summary = store.summary().unwrap();
+        assert_eq!(summary.action_required, 0);
+        assert!(!summary.authorization_required);
     }
 }

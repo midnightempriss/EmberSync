@@ -271,7 +271,10 @@ impl AppState {
                     }
                 }
                 Err(error) => {
-                    state.update_connection(ConnectionState::Error);
+                    // Upload availability and pairing are separate states. Keep
+                    // the device visibly paired while the encrypted queue records
+                    // whether a retry or fresh Battle.net verification is needed.
+                    state.update_connection(ConnectionState::Paired);
                     state.diagnostic(
                         DiagnosticLevel::Warning,
                         format!("Automatic sync deferred safely: {error}"),

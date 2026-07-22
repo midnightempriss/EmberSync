@@ -56,6 +56,51 @@ function Util.SafeCall(fn, ...)
     return true, unpack(packed)
 end
 
+-- Large catalog walks and SavedVariables normalization must never monopolize a
+-- rendered frame. CollectorManager runs collection inside coroutines; yielding
+-- here lets it resume bounded chunks on later frames. Direct calls made during
+-- logout or by tests stay synchronous because there is no running coroutine.
+function Util.Cooperate(index, interval)
+    interval = interval or Constants.COOPERATIVE_WORK_INTERVAL or 200
+    if type(index) ~= "number" or interval < 1 or index % interval ~= 0
+        or type(_G.coroutine) ~= "table" or type(_G.coroutine.running) ~= "function"
+        or type(_G.coroutine.yield) ~= "function" then
+        return false
+    end
+    local thread, isMain = _G.coroutine.running()
+    if thread and not isMain then
+        _G.coroutine.yield("embersync_work_slice")
+        return true
+    end
+    return false
+end
+
+function Util.MonotonicTime()
+    if type(_G.GetTimePreciseSec) == "function" then
+        local ok, value = pcall(_G.GetTimePreciseSec)
+        if ok and type(value) == "number" then
+            return value
+        end
+    end
+    if type(_G.GetTime) == "function" then
+        local ok, value = pcall(_G.GetTime)
+        if ok and type(value) == "number" then
+            return value
+        end
+    end
+    return os and os.clock and os.clock() or 0
+end
+
+function Util.ProfileMilliseconds()
+    if type(_G.debugprofilestop) == "function" then
+        local ok, value = pcall(_G.debugprofilestop)
+        if ok and type(value) == "number" then
+            return value
+        end
+    end
+    return Util.MonotonicTime() * 1000
+end
+
 function Util.CallPath(root, name, ...)
     if type(root) ~= "table" then
         return false, "unsupported"
@@ -128,6 +173,7 @@ function Util.Sanitize(value, options, state, depth)
         local keyType = type(key)
         if keyType == "string" or keyType == "number" then
             state.entries = state.entries + 1
+            Util.Cooperate(state.entries)
             local cleanChild = Util.Sanitize(child, options, state, depth + 1)
             if cleanChild ~= nil then
                 output[key] = cleanChild
@@ -140,7 +186,7 @@ function Util.Sanitize(value, options, state, depth)
     return output, state
 end
 
-function Util.EstimateSize(value, seen)
+function Util.EstimateSize(value, seen, state)
     local valueType = type(value)
     if valueType == "nil" then
         return 0
@@ -154,15 +200,50 @@ function Util.EstimateSize(value, seen)
         return 0
     end
     seen = seen or {}
+    state = state or { entries = 0 }
     if seen[value] then
         return 0
     end
     seen[value] = true
     local size = 8
     for key, child in pairs(value) do
-        size = size + Util.EstimateSize(key, seen) + Util.EstimateSize(child, seen)
+        state.entries = state.entries + 1
+        Util.Cooperate(state.entries)
+        size = size + Util.EstimateSize(key, seen, state) + Util.EstimateSize(child, seen, state)
     end
     return size
+end
+
+function Util.DeepEqual(left, right, state)
+    if left == right then
+        return true
+    end
+    if type(left) ~= type(right) or type(left) ~= "table" then
+        return false
+    end
+    state = state or { entries = 0, seen = {} }
+    if state.seen[left] == right then
+        return true
+    end
+    state.seen[left] = right
+    for key, value in pairs(left) do
+        state.entries = state.entries + 1
+        Util.Cooperate(state.entries)
+        if right[key] == nil and value ~= nil then
+            return false
+        end
+        if not Util.DeepEqual(value, right[key], state) then
+            return false
+        end
+    end
+    for key in pairs(right) do
+        state.entries = state.entries + 1
+        Util.Cooperate(state.entries)
+        if left[key] == nil and right[key] ~= nil then
+            return false
+        end
+    end
+    return true
 end
 
 function Util.Array(...)

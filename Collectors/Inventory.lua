@@ -17,6 +17,7 @@ local Inventory = {
     },
     bankOpen = false,
     debounce = 0.75,
+    minInterval = 5,
 }
 
 function Inventory:HandleEvent(_, event)
@@ -40,6 +41,7 @@ local function collectBag(bagIndex)
     local slots = api.GetContainerNumSlots(bagIndex) or 0
     local bag = { index = bagIndex, slots = slots, items = {} }
     for slot = 1, slots do
+        Util.Cooperate(slot, 25)
         local info = api.GetContainerItemInfo(bagIndex, slot)
         if info then
             bag.items[slot] = Util.Sanitize(info)

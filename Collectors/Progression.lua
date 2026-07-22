@@ -17,6 +17,8 @@ local Progression = {
         "WEEKLY_REWARDS_UPDATE",
     },
     debounce = 1.5,
+    minInterval = 60,
+    expensive = true,
 }
 
 local function collectCurrencies()
@@ -27,6 +29,7 @@ local function collectCurrencies()
         return result, false
     end
     for index = 1, (api.GetCurrencyListSize() or 0) do
+        Util.Cooperate(index, 40)
         local info = api.GetCurrencyListInfo(index)
         if info then
             result[#result + 1] = Util.Sanitize(info)
@@ -41,6 +44,7 @@ local function collectReputations()
     if type(api) == "table" and type(api.GetNumFactions) == "function"
         and type(api.GetFactionDataByIndex) == "function" then
         for index = 1, (api.GetNumFactions() or 0) do
+            Util.Cooperate(index, 40)
             local info = api.GetFactionDataByIndex(index)
             if info and not info.isHeader then
                 result[#result + 1] = Util.Sanitize(info)
@@ -50,6 +54,7 @@ local function collectReputations()
     end
     if type(_G.GetNumFactions) == "function" and type(_G.GetFactionInfo) == "function" then
         for index = 1, (_G.GetNumFactions() or 0) do
+            Util.Cooperate(index, 40)
             local name, description, standingID, bottomValue, topValue, earnedValue,
                 atWar, canToggleAtWar, isHeader, isCollapsed, hasRep, isWatched, isChild, factionID = _G.GetFactionInfo(index)
             if not isHeader then
@@ -81,7 +86,8 @@ local function collectMajorFactions()
         or type(api.GetMajorFactionData) ~= "function" then
         return result, false
     end
-    for _, factionID in ipairs(api.GetMajorFactionIDs() or {}) do
+    for index, factionID in ipairs(api.GetMajorFactionIDs() or {}) do
+        Util.Cooperate(index, 20)
         local ok, data = pcall(api.GetMajorFactionData, factionID)
         if ok and data then
             result[#result + 1] = Util.Sanitize(data)
@@ -99,6 +105,7 @@ local function collectQuests()
     end
     local count = api.GetNumQuestLogEntries() or 0
     for index = 1, count do
+        Util.Cooperate(index, 30)
         local info = api.GetInfo(index)
         if info and not info.isHeader then
             result[#result + 1] = Util.Sanitize(info)
@@ -113,9 +120,12 @@ local function collectAchievements()
         or type(_G.GetAchievementInfo) ~= "function" then
         return result, false
     end
+    local scanned = 0
     for _, categoryID in ipairs(_G.GetCategoryList() or {}) do
         local count = _G.GetCategoryNumAchievements(categoryID, true) or 0
         for index = 1, count do
+            scanned = scanned + 1
+            Util.Cooperate(scanned, 25)
             local achievementID, name, points, completed, month, day, year, description, flags,
                 icon, rewardText, isGuild, wasEarnedByMe, earnedBy = _G.GetAchievementInfo(categoryID, index)
             if completed or wasEarnedByMe then
@@ -145,6 +155,7 @@ local function collectLockouts()
         return result, false
     end
     for index = 1, (_G.GetNumSavedInstances() or 0) do
+        Util.Cooperate(index, 20)
         local name, lockoutID, reset, difficultyID, locked, extended, instanceIDMostSig,
             isRaid, maxPlayers, difficultyName, numEncounters, encounterProgress = _G.GetSavedInstanceInfo(index)
         result[#result + 1] = {

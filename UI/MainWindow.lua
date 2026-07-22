@@ -1,6 +1,7 @@
 local _, EmberSync = ...
 
 local Constants = EmberSync.Constants
+local CollectorManager = EmberSync.CollectorManager
 local Database = EmberSync.Database
 local GuildLock = EmberSync.GuildLock
 local L = EmberSync.L
@@ -235,7 +236,8 @@ end
 
 function MainWindow:GetDiagnosticsText(export)
     local db = _G.EmberSyncDB
-    return table.concat({
+    local estimatedBytes, estimatedAt = Database:GetEstimatedSize()
+    local lines = {
         "Addon version: " .. EmberSync.version,
         "Interface target: " .. Constants.INTERFACE_VERSION,
         "Schema version: " .. Constants.SCHEMA_VERSION,
@@ -245,8 +247,33 @@ function MainWindow:GetDiagnosticsText(export)
         "Installation ID: " .. tostring(db and db.installationId or "not initialized"),
         "Export datasets: " .. tostring(Util.TableCount(export and export.datasets)),
         "Export event streams: " .. tostring(Util.TableCount(export and export.events)),
-        "Estimated account data size: " .. tostring(db and Util.EstimateSize(db) or 0) .. " bytes",
-    }, "\n")
+        "Estimated account data size: " .. (estimatedBytes and (tostring(estimatedBytes) .. " bytes")
+            or "pending background measurement"),
+        "Size measured at: " .. tostring(estimatedAt or "pending"),
+        "Performance mode: frame-sliced collection; bulk scans deferred during combat",
+    }
+    local stats = CollectorManager:GetPerformanceStats()
+    local names = {}
+    for name in pairs(stats) do
+        names[#names + 1] = name
+    end
+    table.sort(names)
+    if #names > 0 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "Collector CPU diagnostics (excludes time yielded between frames):"
+        for _, name in ipairs(names) do
+            local item = stats[name]
+            lines[#lines + 1] = string.format(
+                "%s: %.1f ms last / %.1f ms max, %d slices, %d unchanged",
+                name,
+                item.lastCpuMs or 0,
+                item.maxCpuMs or 0,
+                item.lastYieldCount or 0,
+                item.unchanged or 0
+            )
+        end
+    end
+    return table.concat(lines, "\n")
 end
 
 function MainWindow:Refresh()

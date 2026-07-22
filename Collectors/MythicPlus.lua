@@ -14,6 +14,7 @@ local MythicPlus = {
         "WEEKLY_REWARDS_UPDATE",
     },
     debounce = 1,
+    minInterval = 15,
 }
 
 local function call(api, method, ...)

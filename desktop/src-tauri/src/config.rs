@@ -59,8 +59,13 @@ impl ConfigStore {
             .wow_roots
             .into_iter()
             .filter(|path| path.exists())
+            .map(|path| crate::discovery::normalize_configured_root(&path))
             .collect();
-        roots.extend(crate::discovery::default_roots());
+        roots.extend(
+            crate::discovery::default_roots()
+                .into_iter()
+                .map(|path| crate::discovery::normalize_configured_root(&path)),
+        );
         value.wow_roots = roots.into_iter().collect();
         let store = Self {
             path,
@@ -78,7 +83,7 @@ impl ConfigStore {
         if !path.exists() {
             return Err(ConfigError::MissingRoot);
         }
-        let canonical = path.canonicalize()?;
+        let canonical = crate::discovery::normalize_configured_root(path);
         let mut value = self.value.lock();
         if !value.wow_roots.contains(&canonical) {
             value.wow_roots.push(canonical);

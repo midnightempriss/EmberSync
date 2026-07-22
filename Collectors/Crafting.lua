@@ -18,6 +18,7 @@ local Crafting = {
     },
     ordersOpen = false,
     debounce = 1,
+    minInterval = 5,
 }
 
 function Crafting:HandleEvent(_, event)

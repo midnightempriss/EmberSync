@@ -60,6 +60,13 @@ pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<Desk
         state.config().snapshot().paired_device.ok_or_else(|| {
             "Connect this device to rainingembers.org before syncing.".to_string()
         })?;
+    // Only an explicit user action releases uploads paused after the website
+    // requested fresh Battle.net verification. Background watcher activity
+    // must never turn that policy failure into a retry storm.
+    state
+        .queue()
+        .release_authorization_required()
+        .map_err(|error| error.to_string())?;
     state.update_connection(ConnectionState::Connecting);
     state.emit(&app);
     match state.api().process_queue(&paired).await {
@@ -79,7 +86,9 @@ pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<Desk
             Ok(state.status())
         }
         Err(error) => {
-            state.update_connection(ConnectionState::Error);
+            // A failed upload does not silently unpair the device. The queue
+            // retains the actionable failure and the user can reverify or retry.
+            state.update_connection(ConnectionState::Paired);
             state.diagnostic(
                 DiagnosticLevel::Error,
                 format!("Website sync failed safely: {error}"),
@@ -124,6 +133,10 @@ pub async fn poll_pairing(
         .await
         .map_err(|error| error.to_string())?
     {
+        state
+            .queue()
+            .release_authorization_required()
+            .map_err(|error| error.to_string())?;
         state
             .config()
             .set_paired_device(Some(paired))

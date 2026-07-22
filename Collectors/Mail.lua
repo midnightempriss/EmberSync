@@ -14,6 +14,7 @@ local Mail = {
     },
     isOpen = false,
     debounce = 1,
+    minInterval = 5,
 }
 
 function Mail:HandleEvent(_, event)

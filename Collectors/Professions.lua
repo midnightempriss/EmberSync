@@ -15,6 +15,8 @@ local Professions = {
         "CHAT_MSG_SKILL",
     },
     debounce = 1,
+    minInterval = 30,
+    expensive = true,
 }
 
 local function collectProfessionSummary()
@@ -52,7 +54,8 @@ local function collectRecipes()
         return {}, false
     end
     local recipes = {}
-    for _, recipeID in ipairs(api.GetAllRecipeIDs() or {}) do
+    for index, recipeID in ipairs(api.GetAllRecipeIDs() or {}) do
+        Util.Cooperate(index, 25)
         local info = type(api.GetRecipeInfo) == "function" and api.GetRecipeInfo(recipeID) or nil
         recipes[#recipes + 1] = { id = recipeID, info = Util.Sanitize(info) }
     end

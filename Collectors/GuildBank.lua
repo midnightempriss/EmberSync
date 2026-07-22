@@ -1,6 +1,7 @@
 local _, EmberSync = ...
 
 local Coverage = EmberSync.Coverage
+local Util = EmberSync.Util
 
 local GuildBank = {
     name = "guild_bank",
@@ -16,6 +17,7 @@ local GuildBank = {
     },
     isOpen = false,
     debounce = 0.75,
+    minInterval = 3,
 }
 
 function GuildBank:HandleEvent(_, event)
@@ -37,6 +39,7 @@ local function collectTransactions(tabIndex)
     end
     local count = _G.GetNumGuildBankTransactions(tabIndex) or 0
     for index = 1, math.min(count, 200) do
+        Util.Cooperate(index, 25)
         local transactionType, name, itemLink, countOrMoney, tab1, tab2, year, month, day, hour =
             _G.GetGuildBankTransaction(tabIndex, index)
         events[#events + 1] = {
@@ -89,6 +92,7 @@ function GuildBank:Collect(context)
             tab.text = type(_G.GetGuildBankText) == "function" and _G.GetGuildBankText(tabIndex) or nil
             tab.items = {}
             for slot = 1, 98 do
+                Util.Cooperate(((tabIndex - 1) * 98) + slot, 25)
                 local texture, itemCount, isLocked, isFiltered, quality
                 if type(_G.GetGuildBankItemInfo) == "function" then
                     texture, itemCount, isLocked, isFiltered, quality = _G.GetGuildBankItemInfo(tabIndex, slot)

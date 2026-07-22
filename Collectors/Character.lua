@@ -15,6 +15,7 @@ local Character = {
         "ZONE_CHANGED_NEW_AREA",
         "UPDATE_INVENTORY_DURABILITY",
     },
+    minInterval = 5,
 }
 
 local function collectEquipment()
@@ -63,7 +64,8 @@ local function collectTalents(specializationID)
         local ok, nodeIDs = pcall(traits.GetTreeNodes, activeConfigID)
         if ok and type(nodeIDs) == "table" then
             result.nodes = {}
-            for _, nodeID in ipairs(nodeIDs) do
+            for index, nodeID in ipairs(nodeIDs) do
+                Util.Cooperate(index, 25)
                 local nodeOk, nodeInfo = pcall(traits.GetNodeInfo, activeConfigID, nodeID)
                 if nodeOk and nodeInfo then
                     result.nodes[#result.nodes + 1] = Util.Sanitize(nodeInfo)
