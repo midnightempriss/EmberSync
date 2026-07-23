@@ -42,7 +42,13 @@ pub fn run() {
             if let Some(error)=vault_error{state.diagnostic(models::DiagnosticLevel::Warning,format!("Operating-system credential vault unavailable; encrypted queue remains locked until a passphrase is supplied: {error}"));}
             app.manage(state.clone());
             build_tray(app.handle())?;
-            if std::env::args().any(|argument|argument=="--background"){if let Some(window)=app.get_webview_window("main"){let _=window.hide();}}
+            let background = std::env::args().any(|argument|argument=="--background");
+            if !background {
+                if let Some(window)=app.get_webview_window("main") {
+                    let _=window.show();
+                    let _=window.set_focus();
+                }
+            }
             if let Err(error)=state.start_watcher(app.handle().clone()){state.diagnostic(models::DiagnosticLevel::Warning,format!("SavedVariables watcher could not start: {error}"));}
             let scan_state=state.clone();let scan_app=app.handle().clone();tauri::async_runtime::spawn_blocking(move||{
                 match scan_state.scan(&scan_app) {
