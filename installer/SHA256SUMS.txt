@@ -4,4 +4,4 @@ c1fcd7550617fd583b6dd837a6a988f150a30be94a35db15cb6fd339b6787a1a  EmberSync-0.1.
 ea65a7043740beedf33bdaaec05406795b0aa20632a5cc4f3b99eca6e086ce12  windows/EmberSync_0.1.0_x64-setup.exe
 c9e2442a8a1d0e778c0b80a8b4f250dcf3ce5db09d4141b6c3c3e34e63c49bcb  windows/EmberSync_0.1.0_x64-setup.exe.sig
 c7bba6dddd349a5dacc621f2bd69fd54e9b0f58704a2f5a09a1f6b88381bfae5  windows/EmberSync_0.1.1_x64-setup.exe
-3456a551f4c0e5dda49fb842825209ea3d1801dbad8aededc53a378a96b89b8c  windows/EmberSync_0.1.2_x64-setup.exe
+d5bb6246bbafdcde0d5ecb8b5f82d4fcaa9e82447557a3b456560e9932606983  windows/EmberSync_0.1.2_x64-setup.exe
