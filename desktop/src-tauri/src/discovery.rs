@@ -255,11 +255,6 @@ fn battle_net_install_roots() -> Vec<PathBuf> {
     roots.into_iter().collect()
 }
 
-#[cfg(not(target_os = "windows"))]
-fn battle_net_install_roots() -> Vec<PathBuf> {
-    Vec::new()
-}
-
 #[cfg(target_os = "windows")]
 fn battle_net_aggregate_path() -> Option<PathBuf> {
     std::env::var_os("ProgramData")
@@ -268,6 +263,7 @@ fn battle_net_aggregate_path() -> Option<PathBuf> {
         .map(|root| root.join("Battle.net").join("Agent").join("aggregate.json"))
 }
 
+#[cfg(target_os = "windows")]
 fn read_bounded_json(path: &Path, maximum_bytes: u64) -> io::Result<Vec<u8>> {
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() || metadata.len() > maximum_bytes {
@@ -286,6 +282,7 @@ fn read_bounded_json(path: &Path, maximum_bytes: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn parse_battle_net_aggregate_install_roots(bytes: &[u8]) -> Vec<PathBuf> {
     let Ok(catalog) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return Vec::new();
@@ -308,6 +305,7 @@ fn parse_battle_net_aggregate_install_roots(bytes: &[u8]) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn install_root_from_battle_net_icon(icon_path: &str) -> Option<PathBuf> {
     if icon_path.is_empty()
         || icon_path.len() > 4096
@@ -328,6 +326,7 @@ fn install_root_from_battle_net_icon(icon_path: &str) -> Option<PathBuf> {
     Some(executable_parent.to_path_buf())
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn looks_like_absolute_path(value: &str) -> bool {
     let bytes = value.as_bytes();
     Path::new(value).is_absolute()
@@ -337,6 +336,7 @@ fn looks_like_absolute_path(value: &str) -> bool {
             && matches!(bytes[2], b'/' | b'\\'))
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn parse_registry_install_path(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         let marker = if line.contains("REG_EXPAND_SZ") {
