@@ -8,7 +8,7 @@ empty or inaccessible result cannot be mistaken for a complete enumeration.
 | --- | --- | --- |
 | Guild roster and metadata | Guild | Rank and note visibility follows guild permissions. |
 | Guild bank | Guild | Requires the bank to be opened; tabs and logs follow character permissions. |
-| Calendar | Guild/character | Includes visible guild and character events; invite detail can require interaction. |
+| Calendar | Guild | Includes only explicit `GUILD_EVENT` and `GUILD_ANNOUNCEMENT` records. Character-personal, community, unknown, and global/system entries are excluded at collection time; guild-event invite detail can require interaction. |
 | Housing and neighborhoods | Guild/character | Feature-detected; unsupported fields remain explicitly unsupported. |
 | Character profile and progression | Character | Captured only for the verified source character. |
 | Inventory and equipment | Character | Bank, reagent-bank, and similar storage requires interaction. |

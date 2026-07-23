@@ -54,6 +54,104 @@
         }
       },
       "additionalProperties": false
+    },
+    "guildCalendarEventInfo": {
+      "type": "object",
+      "required": ["calendarType"],
+      "properties": {
+        "calendarType": { "enum": ["GUILD_EVENT", "GUILD_ANNOUNCEMENT"] }
+      },
+      "additionalProperties": { "$ref": "common-v1.schema.json#/$defs/jsonValue" }
+    },
+    "guildCalendarDayEvent": {
+      "type": "object",
+      "required": ["monthOffset", "day", "index", "info", "privacyClass"],
+      "properties": {
+        "monthOffset": { "type": "integer", "minimum": -24, "maximum": 24 },
+        "day": { "type": "integer", "minimum": 1, "maximum": 31 },
+        "index": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "info": { "$ref": "#/$defs/guildCalendarEventInfo" },
+        "privacyClass": { "const": "guild" }
+      },
+      "additionalProperties": false
+    },
+    "guildCalendarOpenedEvent": {
+      "type": "object",
+      "required": ["info", "invites", "observedAt", "privacyClass"],
+      "properties": {
+        "info": { "$ref": "#/$defs/guildCalendarEventInfo" },
+        "invites": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "common-v1.schema.json#/$defs/jsonValue" }
+        },
+        "observedAt": { "type": "number", "minimum": 0 },
+        "privacyClass": { "const": "guild" }
+      },
+      "additionalProperties": false
+    },
+    "guildCalendarPayload": {
+      "type": "object",
+      "required": ["months", "events", "guildEvents", "openedEventDetails", "initialization"],
+      "properties": {
+        "months": {
+          "type": "array",
+          "maxItems": 24,
+          "items": {
+            "type": "object",
+            "required": ["month", "year"],
+            "properties": {
+              "month": { "type": "integer", "minimum": 1, "maximum": 12 },
+              "year": { "type": "integer", "minimum": 2000, "maximum": 2200 },
+              "numDays": { "type": "integer", "minimum": 28, "maximum": 31 },
+              "firstWeekday": { "type": "integer", "minimum": 1, "maximum": 7 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 1400,
+          "items": { "$ref": "#/$defs/guildCalendarDayEvent" }
+        },
+        "guildEvents": {
+          "$comment": "Runtime validation additionally requires this array to be canonically identical to events.",
+          "type": "array",
+          "maxItems": 1400,
+          "items": { "$ref": "#/$defs/guildCalendarDayEvent" }
+        },
+        "lastOpenedEvent": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/guildCalendarOpenedEvent" }
+          ]
+        },
+        "openedEventDetails": {
+          "type": "object",
+          "maxProperties": 200,
+          "additionalProperties": { "$ref": "#/$defs/guildCalendarOpenedEvent" }
+        },
+        "initialization": {
+          "type": "object",
+          "properties": {
+            "status": { "type": "string", "maxLength": 40 },
+            "observedAt": { "type": "number", "minimum": 0 },
+            "readyAt": { "type": "number", "minimum": 0 },
+            "openSupported": { "type": "boolean" },
+            "openRequested": { "type": "boolean" },
+            "retainedLastGood": { "type": "boolean" },
+            "lastGoodCapturedAt": {
+              "oneOf": [
+                { "type": "number", "minimum": 0 },
+                { "type": "string", "maxLength": 64 }
+              ]
+            },
+            "interactionRequired": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "allOf": [
@@ -74,6 +172,19 @@
           "kind": { "const": "state" },
           "dataset": { "$ref": "common-v1.schema.json#/$defs/boundedStateDatasetName" },
           "eventRange": false
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "dataset": { "const": "calendar" } },
+        "required": ["dataset"]
+      },
+      "then": {
+        "properties": {
+          "kind": { "const": "state" },
+          "scope": { "const": "guild" },
+          "payload": { "$ref": "#/$defs/guildCalendarPayload" }
         }
       }
     }

@@ -48,6 +48,69 @@ local function calendarPrivacyClass(info)
     return "personal"
 end
 
+local function isGuildCalendarRecord(record)
+    if Util.IsSecret(record) or type(record) ~= "table" then
+        return false
+    end
+    local info = not Util.IsSecret(record.info) and type(record.info) == "table"
+        and record.info or record
+    return calendarPrivacyClass(info) == "guild"
+end
+
+local function copyGuildCalendarRecords(records)
+    local guildRecords = {}
+    if Util.IsSecret(records) or type(records) ~= "table" then
+        return guildRecords
+    end
+    for _, record in ipairs(records) do
+        if isGuildCalendarRecord(record) then
+            local guildRecord = Util.Copy(record)
+            guildRecord.privacyClass = "guild"
+            guildRecords[#guildRecords + 1] = guildRecord
+        end
+    end
+    return guildRecords
+end
+
+local function copyGuildOpenedEvents(openedEvents)
+    local guildOpenedEvents = {}
+    if Util.IsSecret(openedEvents) or type(openedEvents) ~= "table" then
+        return guildOpenedEvents
+    end
+    for key, opened in pairs(openedEvents) do
+        if not Util.IsSecret(key) and isGuildCalendarRecord(opened) then
+            local guildOpened = Util.Copy(opened)
+            guildOpened.privacyClass = "guild"
+            guildOpenedEvents[key] = guildOpened
+        end
+    end
+    return guildOpenedEvents
+end
+
+local function guildOnlyPayload(payload)
+    local readablePayload = not Util.IsSecret(payload) and type(payload) == "table"
+        and payload or {}
+    local guildEvents = copyGuildCalendarRecords(readablePayload.guildEvents)
+    if #guildEvents == 0 then
+        guildEvents = copyGuildCalendarRecords(readablePayload.events)
+    end
+    local lastOpenedEvent = readablePayload.lastOpenedEvent
+    if not isGuildCalendarRecord(lastOpenedEvent) then
+        lastOpenedEvent = nil
+    else
+        lastOpenedEvent = Util.Copy(lastOpenedEvent)
+        lastOpenedEvent.privacyClass = "guild"
+    end
+    return {
+        months = Util.Copy(readablePayload.months or {}),
+        events = Util.Copy(guildEvents),
+        guildEvents = guildEvents,
+        lastOpenedEvent = lastOpenedEvent,
+        openedEventDetails = copyGuildOpenedEvents(readablePayload.openedEventDetails),
+        initialization = Util.Copy(readablePayload.initialization or {}),
+    }
+end
+
 local function requestCalendarOpen(self, force)
     local api = _G.C_Calendar
     if type(api) ~= "table" or type(api.OpenCalendar) ~= "function" then
@@ -71,8 +134,13 @@ local function openedEventKey(info)
         return Util.SafeString(value, true)
             or (Util.SafeNumber(value) and tostring(Util.SafeNumber(value))) or ""
     end
-    local identityPart = part(readableInfo
-        and (readableInfo.eventID or readableInfo.uid or readableInfo.calendarType))
+    local identityPart = part(readableInfo and readableInfo.eventID)
+    if identityPart == "" then
+        identityPart = part(readableInfo and readableInfo.uid)
+    end
+    if identityPart == "" then
+        identityPart = part(readableInfo and readableInfo.calendarType)
+    end
     if identityPart == "" then
         identityPart = "event"
     end
@@ -93,7 +161,8 @@ local function pruneOpenedEvents(events, limit)
         values[#values + 1] = { key = key, value = value }
     end
     table.sort(values, function(left, right)
-        return (left.value.observedAt or 0) > (right.value.observedAt or 0)
+        return (Util.SafeNumber(left.value.observedAt) or 0)
+            > (Util.SafeNumber(right.value.observedAt) or 0)
     end)
     for index = limit + 1, #values do
         events[values[index].key] = nil
@@ -104,23 +173,39 @@ local function getPreviousEnvelope(context)
     local export = Database:GetActiveExport(false)
     local envelope = type(export) == "table" and type(export.datasets) == "table"
         and export.datasets.calendar or nil
-    if type(envelope) ~= "table" or type(envelope.sourceCharacter) ~= "table"
-        or envelope.sourceCharacter.id ~= context.sourceCharacter.id
-        or type(envelope.payload) ~= "table" then
+    local previousSourceId = not Util.IsSecret(envelope) and type(envelope) == "table"
+        and not Util.IsSecret(envelope.sourceCharacter)
+        and type(envelope.sourceCharacter) == "table"
+        and Util.SafeString(envelope.sourceCharacter.id, false) or nil
+    local currentSourceId = not Util.IsSecret(context) and type(context) == "table"
+        and not Util.IsSecret(context.sourceCharacter)
+        and type(context.sourceCharacter) == "table"
+        and Util.SafeString(context.sourceCharacter.id, false) or nil
+    if Util.IsSecret(envelope) or type(envelope) ~= "table"
+        or not previousSourceId or not currentSourceId
+        or previousSourceId ~= currentSourceId
+        or Util.IsSecret(envelope.payload) or type(envelope.payload) ~= "table" then
         return nil
     end
     return envelope
 end
 
 local function restorePreviousOpenedEvents(context, target)
+    for key, value in pairs(target) do
+        if not isGuildCalendarRecord(value) then
+            target[key] = nil
+        end
+    end
     local envelope = getPreviousEnvelope(context)
     local previous = envelope and envelope.payload.openedEventDetails or nil
-    if type(previous) ~= "table" then
+    if Util.IsSecret(previous) or type(previous) ~= "table" then
         return
     end
     for key, value in pairs(previous) do
-        if target[key] == nil and type(value) == "table" then
-            target[key] = Util.Copy(value)
+        if not Util.IsSecret(key) and target[key] == nil and isGuildCalendarRecord(value) then
+            local guildOpened = Util.Copy(value)
+            guildOpened.privacyClass = "guild"
+            target[key] = guildOpened
         end
     end
     pruneOpenedEvents(target, 200)
@@ -142,27 +227,37 @@ function Calendar:HandleEvent(_, event)
         local api = _G.C_Calendar
         if type(api) == "table" and type(api.GetEventInfo) == "function" then
             local ok, info = pcall(api.GetEventInfo)
-            if ok and info then
-                local opened = {
-                    info = Util.Sanitize(info),
-                    invites = {},
-                    observedAt = Util.Now(),
-                    privacyClass = calendarPrivacyClass(info),
-                }
-                if type(api.GetNumInvites) == "function" and type(api.GetInviteInfo) == "function" then
-                    local countOk, count = pcall(api.GetNumInvites)
-                    if countOk then
-                        for index = 1, math.min(tonumber(count) or 0, 100) do
-                            local inviteOk, invite = pcall(api.GetInviteInfo, index)
-                            if inviteOk and invite then
-                                opened.invites[#opened.invites + 1] = Util.Sanitize(invite)
+            if ok and not Util.IsSecret(info) and type(info) == "table" then
+                if calendarPrivacyClass(info) == "guild" then
+                    local opened = {
+                        info = Util.Sanitize(info),
+                        invites = {},
+                        observedAt = Util.Now(),
+                        privacyClass = "guild",
+                    }
+                    if type(api.GetNumInvites) == "function" and type(api.GetInviteInfo) == "function" then
+                        local countOk, count = pcall(api.GetNumInvites)
+                        if countOk then
+                            for index = 1, math.min(Util.SafeNumber(count) or 0, 100) do
+                                local inviteOk, invite = pcall(api.GetInviteInfo, index)
+                                if inviteOk and not Util.IsSecret(invite)
+                                    and type(invite) == "table" then
+                                    opened.invites[#opened.invites + 1] = Util.Sanitize(invite)
+                                end
                             end
                         end
                     end
+                    self.openedEvent = opened
+                    self.openedEvents[openedEventKey(info)] = opened
+                    pruneOpenedEvents(self.openedEvents, 200)
+                else
+                    -- Never stage a player, community, global, or unknown event.
+                    -- Clearing the single-event pointer also prevents a previously
+                    -- opened guild record from being misattributed to this context.
+                    self.openedEvent = nil
                 end
-                self.openedEvent = opened
-                self.openedEvents[openedEventKey(info)] = opened
-                pruneOpenedEvents(self.openedEvents, 200)
+            elseif ok then
+                self.openedEvent = nil
             end
         end
     end
@@ -187,39 +282,33 @@ function Calendar:Collect(context)
     restorePreviousOpenedEvents(context, self.openedEvents)
     local events = {}
     local guildEvents = {}
-    local globalEvents = {}
-    local personalEvents = {}
     local months = {}
     local workItems = 0
     for monthOffset = -1, 12 do
         local ok, monthInfo = pcall(api.GetMonthInfo, monthOffset)
         if ok and not Util.IsSecret(monthInfo) and type(monthInfo) == "table" then
             months[#months + 1] = Util.Sanitize(monthInfo)
-            local numberOfDays = math.min(31, tonumber(monthInfo.numDays) or 31)
+            local numberOfDays = math.min(31, Util.SafeNumber(monthInfo.numDays) or 31)
             for day = 1, numberOfDays do
                 workItems = workItems + 1
                 Util.Cooperate(workItems, 20)
                 local countOk, count = pcall(api.GetNumDayEvents, monthOffset, day)
                 if countOk then
-                    for eventIndex = 1, math.min(tonumber(count) or 0, 100) do
+                    for eventIndex = 1, math.min(Util.SafeNumber(count) or 0, 100) do
                         workItems = workItems + 1
                         Util.Cooperate(workItems, 20)
                         local eventOk, event = pcall(api.GetDayEvent, monthOffset, day, eventIndex)
-                        if eventOk and event then
-                            local record = {
-                                monthOffset = monthOffset,
-                                day = day,
-                                index = eventIndex,
-                                info = Util.Sanitize(event),
-                                privacyClass = calendarPrivacyClass(event),
-                            }
-                            events[#events + 1] = record
-                            if record.privacyClass == "guild" then
+                        if eventOk and not Util.IsSecret(event) and type(event) == "table" then
+                            if calendarPrivacyClass(event) == "guild" then
+                                local record = {
+                                    monthOffset = monthOffset,
+                                    day = day,
+                                    index = eventIndex,
+                                    info = Util.Sanitize(event),
+                                    privacyClass = "guild",
+                                }
+                                events[#events + 1] = record
                                 guildEvents[#guildEvents + 1] = Util.Copy(record)
-                            elseif record.privacyClass == "global" then
-                                globalEvents[#globalEvents + 1] = Util.Copy(record)
-                            else
-                                personalEvents[#personalEvents + 1] = Util.Copy(record)
                             end
                         end
                     end
@@ -231,7 +320,7 @@ function Calendar:Collect(context)
     if #months == 0 then
         local previousEnvelope = getPreviousEnvelope(context)
         if previousEnvelope then
-            local retained = Util.Copy(previousEnvelope.payload)
+            local retained = guildOnlyPayload(previousEnvelope.payload)
             retained.initialization = {
                 openSupported = openSupported,
                 openRequested = openRequested,
@@ -243,7 +332,9 @@ function Calendar:Collect(context)
                 openRequested = openRequested,
                 retainedLastGood = true,
                 lastGoodCapturedAt = previousEnvelope.capturedAt,
-            }), context.guild.key
+            }), context.guild.key, nil, {
+                allowCrossSourceReplace = true,
+            }
         end
     end
 
@@ -251,8 +342,6 @@ function Calendar:Collect(context)
         months = months,
         events = events,
         guildEvents = guildEvents,
-        globalEvents = globalEvents,
-        personalEvents = personalEvents,
         lastOpenedEvent = Util.Copy(self.openedEvent),
         openedEventDetails = Util.Copy(self.openedEvents),
         initialization = {
@@ -264,15 +353,15 @@ function Calendar:Collect(context)
     return payload, Coverage.Partial("event_details_require_calendar_context", {
         eventCount = #events,
         guildEventCount = #guildEvents,
-        globalEventCount = #globalEvents,
-        personalEventCount = #personalEvents,
         openedEventDetailCount = Util.TableCount(self.openedEvents),
         windowStartMonthOffset = -1,
         windowEndMonthOffset = 12,
         openSupported = openSupported,
         openRequested = openRequested,
         opportunity = "Open individual guild calendar events to capture their full details and invite lists.",
-    }), context.guild.key
+    }), context.guild.key, nil, {
+        allowCrossSourceReplace = true,
+    }
 end
 
 EmberSync.CollectorManager:Register(Calendar)

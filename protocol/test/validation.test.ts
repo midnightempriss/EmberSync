@@ -121,6 +121,77 @@ test("desktop conversion adds canonical identity and a verified payload hash", a
   assert.equal(await verifyDatasetEnvelopePayloadHashV1(altered), false);
 });
 
+test("calendar validation permits only the explicit guild-only payload contract", async () => {
+  const guildEvent = {
+    monthOffset: 0,
+    day: 23,
+    index: 1,
+    privacyClass: "guild",
+    info: {
+      eventID: "guild-event",
+      calendarType: "GUILD_EVENT",
+      title: "Guild event",
+      startTime: { year: 2026, month: 7, monthDay: 23, hour: 18, minute: 0 },
+    },
+  };
+  const payload = {
+    months: [{ month: 7, year: 2026, numDays: 31, firstWeekday: 4 }],
+    events: [guildEvent],
+    guildEvents: [guildEvent],
+    openedEventDetails: {},
+    initialization: { openSupported: true, openRequested: true },
+  };
+  const calendarAddon = {
+    ...addonEnvelope,
+    dataset: "calendar",
+    payload,
+  } satisfies AddonDatasetEnvelopeV1;
+  const saved = validateEmberSyncSavedVariablesV1(savedVariables({
+    datasets: { calendar: calendarAddon },
+    coverage: { calendar: coverage },
+  }));
+  assert.equal(saved.ok, true, saved.ok ? undefined : JSON.stringify(saved.issues));
+  const upload = await createDatasetEnvelopeV1(calendarAddon, "state");
+  assert.equal(validateDatasetEnvelopeV1(upload).ok, true);
+
+  for (const forbidden of [
+    { ...payload, personalEvents: [{ title: "Private invitation" }] },
+    {
+      ...payload,
+      events: [{ ...guildEvent, privacyClass: "personal" }],
+    },
+    {
+      ...payload,
+      guildEvents: [{
+        ...guildEvent,
+        info: { ...guildEvent.info, calendarType: "PLAYER" },
+      }],
+    },
+    {
+      ...payload,
+      guildEvents: [],
+    },
+    {
+      ...payload,
+      initialization: { openSupported: "yes" },
+    },
+    {
+      ...payload,
+      initialization: { status: "x".repeat(41) },
+    },
+    {
+      ...payload,
+      initialization: { observedAt: "today" },
+    },
+    {
+      ...payload,
+      initialization: { lastGoodCapturedAt: {} },
+    },
+  ]) {
+    assert.equal(validateDatasetEnvelopeV1({ ...upload, payload: forbidden }).ok, false);
+  }
+});
+
 test("accepts bounded event dataset names and enforces event kind", async () => {
   assert.deepEqual(EVENT_DATASET_NAMES_V1, [
     "events.guild_chat",

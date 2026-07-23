@@ -41,6 +41,8 @@ test("guild-bank requests stay serialized without re-attributing closed-context 
     local registered
     local now = 50
     local queries = {}
+    local secretItemLink = {}
+    issecretvalue = function(value) return value == secretItemLink end
     GetTime = function() return now end
     EmberSync.CollectorManager = { Register = function(_, value) registered = value end }
     EmberSync.Database = {
@@ -67,8 +69,17 @@ test("guild-bank requests stay serialized without re-attributing closed-context 
     QueryGuildBankTab = function(tab) queries[#queries + 1] = { "items", tab } end
     QueryGuildBankLog = function(tab) queries[#queries + 1] = { "log", tab } end
     QueryGuildBankText = function(tab) queries[#queries + 1] = { "text", tab } end
-    GetGuildBankItemInfo = function() return nil end
-    GetGuildBankItemLink = function() return nil end
+    GetGuildBankItemInfo = function(tab, slot)
+      if tab == 1 and slot == 1 then return 7549241, 7, false, false, 1 end
+      return nil
+    end
+    GetGuildBankItemLink = function(tab, slot)
+      if tab == 1 and slot == 1 then
+        return "|cnIQ1:|Hitem:238511::::::::90:257:::::::::|h[Fixture Leather |A:Professions-ChatIcon-Quality-12-Tier1:17:15::1|a]|h|r"
+      end
+      if tab == 1 and slot == 2 then return secretItemLink end
+      return nil
+    end
     GetNumGuildBankTransactions = function() return 0 end
     GetGuildBankText = function(tab) return "Text " .. tab end
     GetGuildBankMoney = function() return 100 end
@@ -94,7 +105,12 @@ test("guild-bank requests stay serialized without re-attributing closed-context 
     registered:Collect(context)
     assert(#queries == 3, "an outstanding tab request must block overlapping requests")
     registered:HandleEvent(context, "GUILDBANKBAGSLOTS_CHANGED")
-    registered:Collect(context)
+    local itemPass = registered:Collect(context)
+    assert(itemPass.tabs[1].items[1].itemID == 238511)
+    assert(itemPass.tabs[1].items[1].iconFileID == 7549241)
+    assert(itemPass.tabs[1].items[1].texture == 7549241)
+    assert(itemPass.tabs[1].items[2] == nil,
+      "secret item links must be omitted before string matching or comparison")
     assert(#queries == 3, "item response alone must not advance past pending log/text")
     registered:HandleEvent(context, "GUILDBANKLOG_UPDATE")
     registered:Collect(context)

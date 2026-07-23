@@ -35,7 +35,7 @@ test("all addon Lua parses as Lua 5.1", async () => {
 test("TOC targets Retail 12.0.7 and every listed Lua file exists", async () => {
   const toc = await readFile(path.join(addonRoot, "EmberSync.toc"), "utf8");
   assert.match(toc, /^## Interface: 120007$/m);
-  assert.match(toc, /^## Version: 0\.1\.4$/m);
+  assert.match(toc, /^## Version: 0\.1\.5$/m);
   assert.match(toc, /^## SavedVariables: EmberSyncDB$/m);
   assert.match(toc, /^## AddonCompartmentFunc: EmberSync_OnAddonCompartmentClick$/m);
   const luaPaths = toc.split(/\r?\n/).filter((line) => line.trim().endsWith(".lua"));
@@ -44,7 +44,7 @@ test("TOC targets Retail 12.0.7 and every listed Lua file exists", async () => {
     assert.ok(source.length > 0, `${relative} should not be empty`);
   }
   const namespace = await readFile(path.join(addonRoot, "Core/Namespace.lua"), "utf8");
-  assert.match(namespace, /EmberSync\.version = "0\.1\.4"/);
+  assert.match(namespace, /EmberSync\.version = "0\.1\.5"/);
 });
 
 test("privacy exclusions and exact nonmember copy are source-enforced", async () => {

@@ -3,6 +3,17 @@
 All notable EmberSync changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 0.1.5 - 2026-07-23
+
+### Fixed
+
+- Excluded character-personal calendar entries and invitations from collection,
+  retained last-good state, projections, and website APIs. EmberSync calendar
+  observations are limited to explicitly guild-scoped events.
+- Added explicit, secret-safe Guild Bank item and icon identifiers so the
+  website can resolve official Blizzard item artwork without trusting arbitrary
+  image URLs or preserving WoW chat-atlas markup in item names.
+
 ## 0.1.4 - 2026-07-23
 
 ### Added

@@ -66,10 +66,12 @@ Installation and release-maintainer instructions live in
 
 ## Status
 
-Version `0.1.4` keeps the 15-minute guarded background scan while adding
+Version `0.1.5` keeps the 15-minute guarded background scan and the 0.1.4
 secret-safe collection, passive calendar and world-quest discovery,
 multi-subdivision housing retention, first-class coverage synchronization, and
-one canonical dataset contract from the addon through the website. Existing
+one canonical dataset contract from the addon through the website. Calendar
+capture is restricted to explicit guild events; personal entries and
+invitations are excluded. Existing
 0.1.3 state is reconciled once after upgrade so corrected G.M.O.D., guild
 metrics, and Neighborhood projections can be rebuilt without deleting local
 data.

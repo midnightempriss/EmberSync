@@ -217,10 +217,11 @@ test("guild tracks component readiness and preserves last-good GMOD before an ex
   `);
 });
 
-test("calendar initializes passively and partitions global, guild, and personal records", async () => {
+test("calendar initializes passively and persists only clearly guild-scoped records", async () => {
   await execute(utilityModules, `
     local registered
     local opens = 0
+    local openedInfo = { title = "Guild Detail", calendarType = "GUILD_EVENT", eventID = 10 }
     GetServerTime = function() return 3000 end
     GetTime = function() return 50 end
     EmberSync.CollectorManager = { Register = function(_, collector) registered = collector end }
@@ -231,13 +232,21 @@ test("calendar initializes passively and partitions global, guild, and personal 
         if offset == 0 then return { numDays = 1, month = 7, year = 2026 } end
       end,
       GetNumDayEvents = function(offset)
-        return offset == 0 and 3 or 0
+        return offset == 0 and 6 or 0
       end,
       GetDayEvent = function(_, _, index)
         if index == 1 then return { title = "Holiday", calendarType = "HOLIDAY" } end
         if index == 2 then return { title = "Guild Event", calendarType = "GUILD_EVENT" } end
-        return { title = "Invite", calendarType = "PLAYER" }
+        if index == 3 then return { title = "Invite", calendarType = "PLAYER" } end
+        if index == 4 then
+          return { title = "Guild Announcement", calendarType = "GUILD_ANNOUNCEMENT" }
+        end
+        if index == 5 then return { title = "Community", calendarType = "COMMUNITY_EVENT" } end
+        return { title = "Unknown" }
       end,
+      GetEventInfo = function() return openedInfo end,
+      GetNumInvites = function() return 1 end,
+      GetInviteInfo = function() return { name = "Guild Attendee" } end,
     }
   ` + await moduleSource("Collectors/Calendar.lua"), `
     local context = {
@@ -245,13 +254,108 @@ test("calendar initializes passively and partitions global, guild, and personal 
       sourceCharacter = { id = "Player-Test" },
     }
     assert(registered:HandleEvent(context, "PLAYER_ENTERING_WORLD") == false)
-    local payload, coverage = registered:Collect(context)
+    registered:HandleEvent(context, "CALENDAR_OPEN_EVENT")
+    openedInfo = { title = "Private Detail", calendarType = "PLAYER", eventID = 11 }
+    registered:HandleEvent(context, "CALENDAR_UPDATE_EVENT")
+    local payload, coverage, _, _, options = registered:Collect(context)
     assert(opens == 1, "collection reuses the passive initialization cooldown")
-    assert(#payload.events == 3)
-    assert(#payload.globalEvents == 1 and #payload.guildEvents == 1 and #payload.personalEvents == 1)
-    assert(payload.personalEvents[1].privacyClass == "personal")
+    assert(#payload.events == 2 and #payload.guildEvents == 2)
+    assert(payload.events[1].info.title == "Guild Event")
+    assert(payload.events[2].info.title == "Guild Announcement")
+    for _, record in ipairs(payload.events) do
+      assert(record.privacyClass == "guild")
+      assert(record.info.calendarType == "GUILD_EVENT"
+        or record.info.calendarType == "GUILD_ANNOUNCEMENT")
+    end
+    assert(payload.globalEvents == nil and payload.personalEvents == nil)
+    assert(payload.lastOpenedEvent == nil, "opening a personal entry clears the detail pointer")
+    assert(EmberSync.Util.TableCount(payload.openedEventDetails) == 1)
+    local _, detail = next(payload.openedEventDetails)
+    assert(detail.info.title == "Guild Detail" and detail.privacyClass == "guild")
     assert(payload.initialization.openSupported == true and payload.initialization.openRequested == true)
-    assert(coverage.status == "partial" and coverage.personalEventCount == 1)
+    assert(coverage.status == "partial" and coverage.eventCount == 2)
+    assert(coverage.guildEventCount == 2)
+    assert(coverage.excludedNonGuildEventCount == nil)
+    assert(coverage.personalEventCount == nil and coverage.globalEventCount == nil)
+    assert(options.allowCrossSourceReplace == true)
+  `);
+});
+
+test("calendar purges legacy personal and global entries from retained last-good data", async () => {
+  await execute(utilityModules, `
+    local registered
+    GetServerTime = function() return 3100 end
+    GetTime = function() return 60 end
+    EmberSync.CollectorManager = { Register = function(_, collector) registered = collector end }
+    EmberSync.Database = {
+      GetActiveExport = function()
+        return {
+          datasets = {
+            calendar = {
+              capturedAt = 2500,
+              sourceCharacter = { id = "Player-Test" },
+              payload = {
+                months = { { month = 7, year = 2026, numDays = 31 } },
+                events = {
+                  { info = { title = "Guild Event", calendarType = "GUILD_EVENT" } },
+                  { info = { title = "Private Invite", calendarType = "PLAYER" } },
+                  { info = { title = "Holiday", calendarType = "HOLIDAY" } },
+                },
+                guildEvents = {
+                  { info = { title = "Guild Event", calendarType = "GUILD_EVENT" } },
+                },
+                personalEvents = {
+                  { info = { title = "Private Invite", calendarType = "PLAYER" } },
+                },
+                globalEvents = {
+                  { info = { title = "Holiday", calendarType = "HOLIDAY" } },
+                },
+                lastOpenedEvent = {
+                  info = { title = "Private Detail", calendarType = "PLAYER" },
+                  privacyClass = "personal",
+                },
+                openedEventDetails = {
+                  guild = {
+                    info = { title = "Guild Detail", calendarType = "GUILD_ANNOUNCEMENT" },
+                    privacyClass = "guild",
+                  },
+                  private = {
+                    info = { title = "Private Detail", calendarType = "PLAYER" },
+                    privacyClass = "personal",
+                  },
+                  global = {
+                    info = { title = "Global Detail", calendarType = "HOLIDAY" },
+                    privacyClass = "global",
+                  },
+                },
+              },
+            },
+          },
+        }
+      end,
+    }
+    C_Calendar = {
+      OpenCalendar = function() end,
+      GetMonthInfo = function() return nil end,
+      GetNumDayEvents = function() return 0 end,
+      GetDayEvent = function() return nil end,
+    }
+  ` + await moduleSource("Collectors/Calendar.lua"), `
+    local context = {
+      guild = { key = "main" },
+      sourceCharacter = { id = "Player-Test" },
+    }
+    local payload, coverage, _, _, options = registered:Collect(context)
+    assert(#payload.events == 1 and #payload.guildEvents == 1)
+    assert(payload.events[1].info.title == "Guild Event")
+    assert(payload.personalEvents == nil and payload.globalEvents == nil)
+    assert(payload.lastOpenedEvent == nil)
+    assert(EmberSync.Util.TableCount(payload.openedEventDetails) == 1)
+    assert(payload.openedEventDetails.guild.info.title == "Guild Detail")
+    assert(payload.openedEventDetails.private == nil and payload.openedEventDetails.global == nil)
+    assert(coverage.reason == "calendar_initialization_pending")
+    assert(coverage.retainedLastGood == true and coverage.lastGoodCapturedAt == 2500)
+    assert(options.allowCrossSourceReplace == true)
   `);
 });
 

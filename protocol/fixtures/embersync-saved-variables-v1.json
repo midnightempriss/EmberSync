@@ -15,7 +15,7 @@
         "bankTabs": 7,
         "bankItems": 419,
         "bankTransactions": 175,
-        "calendarEvents": 251,
+        "calendarEvents": 6,
         "housingRoster": 66,
         "housingMapPlots": 55,
         "eventRecords": 355
@@ -27,7 +27,7 @@
         "bankTabs": 0,
         "bankItems": 0,
         "bankTransactions": 0,
-        "calendarEvents": 251,
+        "calendarEvents": 6,
         "housingRoster": 0,
         "housingMapPlots": 0,
         "eventRecords": 0
@@ -555,11 +555,12 @@
             "reason": "fixture_reason",
             "openedEventDetailCount": 0,
             "opportunity": "fixture_reason",
-            "eventCount": 251,
+            "eventCount": 6,
             "status": "partial",
             "windowEndMonthOffset": 12,
             "observedAt": 1784764902,
-            "windowStartMonthOffset": -1
+            "windowStartMonthOffset": -1,
+            "guildEventCount": 6
           },
           "guild": {
             "key": "main",
@@ -632,11 +633,12 @@
                   "title": "Fixture Title 075",
                   "sequenceIndex": 1,
                   "dontDisplayEnd": false,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": false,
                   "eventID": 341
                 },
-                "day": 24
+                "day": 24,
+                "privacyClass": "guild"
               },
               {
                 "index": 1,
@@ -674,11 +676,12 @@
                   "title": "Fixture Title 075",
                   "sequenceIndex": 2,
                   "dontDisplayEnd": false,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": false,
                   "eventID": 341
                 },
-                "day": 25
+                "day": 25,
+                "privacyClass": "guild"
               },
               {
                 "index": 1,
@@ -716,11 +719,12 @@
                   "title": "Fixture Title 075",
                   "sequenceIndex": 3,
                   "dontDisplayEnd": false,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": false,
                   "eventID": 341
                 },
-                "day": 26
+                "day": 26,
+                "privacyClass": "guild"
               },
               {
                 "index": 2,
@@ -758,11 +762,12 @@
                   "title": "Fixture Title 076",
                   "sequenceIndex": 1,
                   "dontDisplayEnd": true,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": true,
                   "eventID": 563
                 },
-                "day": 27
+                "day": 27,
+                "privacyClass": "guild"
               },
               {
                 "index": 3,
@@ -800,11 +805,12 @@
                   "title": "Fixture Title 077",
                   "sequenceIndex": 1,
                   "dontDisplayEnd": true,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": true,
                   "eventID": 662
                 },
-                "day": 28
+                "day": 28,
+                "privacyClass": "guild"
               },
               {
                 "index": 1,
@@ -842,13 +848,279 @@
                   "title": "Fixture Title 075",
                   "sequenceIndex": 4,
                   "dontDisplayEnd": false,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": false,
                   "eventID": 341
                 },
-                "day": 29
+                "day": 29,
+                "privacyClass": "guild"
               }
-            ]
+            ],
+            "guildEvents": [
+              {
+                "index": 1,
+                "monthOffset": 0,
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 15,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "START",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 24,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 235474,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 24,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 075",
+                  "sequenceIndex": 1,
+                  "dontDisplayEnd": false,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": false,
+                  "eventID": 341
+                },
+                "day": 24,
+                "privacyClass": "guild"
+              },
+              {
+                "index": 1,
+                "monthOffset": 0,
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 15,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "ONGOING",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 25,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 235473,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 25,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 075",
+                  "sequenceIndex": 2,
+                  "dontDisplayEnd": false,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": false,
+                  "eventID": 341
+                },
+                "day": 25,
+                "privacyClass": "guild"
+              },
+              {
+                "index": 1,
+                "monthOffset": 0,
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 15,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "ONGOING",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 26,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 235473,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 26,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 075",
+                  "sequenceIndex": 3,
+                  "dontDisplayEnd": false,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": false,
+                  "eventID": 341
+                },
+                "day": 26,
+                "privacyClass": "guild"
+              },
+              {
+                "index": 2,
+                "monthOffset": 0,
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 8,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "START",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 27,
+                    "weekday": 3,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 1129671,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 27,
+                    "weekday": 3,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 076",
+                  "sequenceIndex": 1,
+                  "dontDisplayEnd": true,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": true,
+                  "eventID": 563
+                },
+                "day": 27,
+                "privacyClass": "guild"
+              },
+              {
+                "index": 3,
+                "monthOffset": 0,
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 8,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "START",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 28,
+                    "weekday": 3,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 1616334,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 28,
+                    "weekday": 3,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 077",
+                  "sequenceIndex": 1,
+                  "dontDisplayEnd": true,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": true,
+                  "eventID": 662
+                },
+                "day": 28,
+                "privacyClass": "guild"
+              },
+              {
+                "index": 1,
+                "monthOffset": 0,
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 15,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "ONGOING",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 29,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 235473,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 29,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 075",
+                  "sequenceIndex": 4,
+                  "dontDisplayEnd": false,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": false,
+                  "eventID": 341
+                },
+                "day": 29,
+                "privacyClass": "guild"
+              }
+            ],
+            "initialization": {
+              "openSupported": true,
+              "openRequested": true,
+              "readyAt": 1784764902
+            }
           },
           "sourceCharacter": {
             "id": "Player-9999-F0000001",
@@ -4931,11 +5203,12 @@
             "reason": "fixture_reason",
             "openedEventDetailCount": 0,
             "opportunity": "fixture_reason",
-            "eventCount": 251,
+            "eventCount": 6,
             "status": "partial",
             "windowEndMonthOffset": 12,
             "observedAt": 1784765007,
-            "windowStartMonthOffset": -1
+            "windowStartMonthOffset": -1,
+            "guildEventCount": 6
           },
           "guild": {
             "key": "alt",
@@ -5006,13 +5279,14 @@
                   "title": "Fixture Title 075",
                   "sequenceIndex": 1,
                   "dontDisplayEnd": false,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": false,
                   "eventID": 341
                 },
                 "monthOffset": 0,
                 "day": 24,
-                "index": 1
+                "index": 1,
+                "privacyClass": "guild"
               },
               {
                 "info": {
@@ -5048,13 +5322,14 @@
                   "title": "Fixture Title 075",
                   "sequenceIndex": 2,
                   "dontDisplayEnd": false,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": false,
                   "eventID": 341
                 },
                 "monthOffset": 0,
                 "day": 25,
-                "index": 1
+                "index": 1,
+                "privacyClass": "guild"
               },
               {
                 "info": {
@@ -5090,13 +5365,14 @@
                   "title": "Fixture Title 075",
                   "sequenceIndex": 3,
                   "dontDisplayEnd": false,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": false,
                   "eventID": 341
                 },
                 "monthOffset": 0,
                 "day": 26,
-                "index": 1
+                "index": 1,
+                "privacyClass": "guild"
               },
               {
                 "info": {
@@ -5132,13 +5408,14 @@
                   "title": "Fixture Title 076",
                   "sequenceIndex": 1,
                   "dontDisplayEnd": true,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": true,
                   "eventID": 563
                 },
                 "monthOffset": 0,
                 "day": 27,
-                "index": 2
+                "index": 2,
+                "privacyClass": "guild"
               },
               {
                 "info": {
@@ -5174,13 +5451,14 @@
                   "title": "Fixture Title 077",
                   "sequenceIndex": 1,
                   "dontDisplayEnd": true,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": true,
                   "eventID": 662
                 },
                 "monthOffset": 0,
                 "day": 28,
-                "index": 3
+                "index": 3,
+                "privacyClass": "guild"
               },
               {
                 "info": {
@@ -5216,15 +5494,281 @@
                   "title": "Fixture Title 075",
                   "sequenceIndex": 4,
                   "dontDisplayEnd": false,
-                  "calendarType": "HOLIDAY",
+                  "calendarType": "GUILD_EVENT",
                   "dontDisplayBanner": false,
                   "eventID": 341
                 },
                 "monthOffset": 0,
                 "day": 29,
-                "index": 1
+                "index": 1,
+                "privacyClass": "guild"
               }
-            ]
+            ],
+            "guildEvents": [
+              {
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 15,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "START",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 24,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 235474,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 24,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 075",
+                  "sequenceIndex": 1,
+                  "dontDisplayEnd": false,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": false,
+                  "eventID": 341
+                },
+                "monthOffset": 0,
+                "day": 24,
+                "index": 1,
+                "privacyClass": "guild"
+              },
+              {
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 15,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "ONGOING",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 25,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 235473,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 25,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 075",
+                  "sequenceIndex": 2,
+                  "dontDisplayEnd": false,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": false,
+                  "eventID": 341
+                },
+                "monthOffset": 0,
+                "day": 25,
+                "index": 1,
+                "privacyClass": "guild"
+              },
+              {
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 15,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "ONGOING",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 26,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 235473,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 26,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 075",
+                  "sequenceIndex": 3,
+                  "dontDisplayEnd": false,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": false,
+                  "eventID": 341
+                },
+                "monthOffset": 0,
+                "day": 26,
+                "index": 1,
+                "privacyClass": "guild"
+              },
+              {
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 8,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "START",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 27,
+                    "weekday": 3,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 1129671,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 27,
+                    "weekday": 3,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 076",
+                  "sequenceIndex": 1,
+                  "dontDisplayEnd": true,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": true,
+                  "eventID": 563
+                },
+                "monthOffset": 0,
+                "day": 27,
+                "index": 2,
+                "privacyClass": "guild"
+              },
+              {
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 8,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "START",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 28,
+                    "weekday": 3,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 1616334,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 28,
+                    "weekday": 3,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 077",
+                  "sequenceIndex": 1,
+                  "dontDisplayEnd": true,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": true,
+                  "eventID": 662
+                },
+                "monthOffset": 0,
+                "day": 28,
+                "index": 3,
+                "privacyClass": "guild"
+              },
+              {
+                "info": {
+                  "clubID": 0,
+                  "numSequenceDays": 15,
+                  "modStatus": "Fixture text 072",
+                  "eventType": 4,
+                  "sequenceType": "ONGOING",
+                  "isCustomTitle": true,
+                  "startTime": {
+                    "monthDay": 29,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 18,
+                    "year": 2026
+                  },
+                  "iconTexture": 235473,
+                  "difficultyName": "Fixture Name 073",
+                  "endTime": {
+                    "monthDay": 29,
+                    "weekday": 1,
+                    "month": 7,
+                    "minute": 0,
+                    "hour": 19,
+                    "year": 2026
+                  },
+                  "invitedBy": "Fixture text 074",
+                  "inviteStatus": 0,
+                  "inviteType": 0,
+                  "difficulty": 0,
+                  "isLocked": false,
+                  "title": "Fixture Title 075",
+                  "sequenceIndex": 4,
+                  "dontDisplayEnd": false,
+                  "calendarType": "GUILD_EVENT",
+                  "dontDisplayBanner": false,
+                  "eventID": 341
+                },
+                "monthOffset": 0,
+                "day": 29,
+                "index": 1,
+                "privacyClass": "guild"
+              }
+            ],
+            "initialization": {
+              "openSupported": true,
+              "openRequested": true,
+              "readyAt": 1784765007
+            }
           },
           "sourceCharacter": {
             "id": "Player-9999-F0000076",

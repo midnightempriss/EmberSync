@@ -28,6 +28,8 @@ pub enum IngestError {
     InvalidTime,
     #[error("dataset identity does not match its verified export")]
     DatasetMismatch,
+    #[error("calendar payload contains records outside the guild-only privacy contract")]
+    CalendarPrivacy,
     #[error("local encrypted queue rejected the export: {0}")]
     Queue(#[from] QueueError),
 }
@@ -88,9 +90,28 @@ impl Ingestor {
             let export: RawGuildExport = serde_json::from_value(value)?;
             validate_export(&map_key, &database.installation_id, &export)?;
             let mut state_count = 0;
+            let mut calendar_quarantined = false;
             for (dataset_key, value) in &export.datasets {
                 let raw: RawDatasetEnvelope = serde_json::from_value(value.clone())?;
-                validate_dataset(&map_key, dataset_key, &export, &raw)?;
+                match validate_dataset(&map_key, dataset_key, &export, &raw) {
+                    Ok(()) => {}
+                    // A prerelease SavedVariables file may still contain a
+                    // mixed calendar payload. Quarantine that one dataset so
+                    // unrelated guild data remains uploadable.
+                    Err(IngestError::CalendarPrivacy) => {
+                        calendar_quarantined = true;
+                        rows.push(CoverageRow {
+                            guild_key: export.guild.key,
+                            dataset: "calendar".into(),
+                            subject_id: raw.subject_id.clone(),
+                            status: CoverageStatus::Forbidden,
+                            observed_at: Some(required_time(raw.captured_at)?),
+                            reason: Some("calendar_privacy_quarantined".into()),
+                        });
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
                 let envelope = normalize_dataset(
                     raw,
                     DatasetKind::State,
@@ -125,6 +146,9 @@ impl Ingestor {
                 }
             }
             for (dataset, value) in &export.coverage {
+                if calendar_quarantined && dataset == "calendar" {
+                    continue;
+                }
                 if let Ok(coverage) = serde_json::from_value::<RawCoverage>(value.clone()) {
                     let observed_at = optional_time(coverage.observed_at)?;
                     if let Some(envelope) = staged.iter_mut().find(|envelope| {
@@ -269,6 +293,9 @@ fn validate_dataset(
         return Err(IngestError::DatasetMismatch);
     }
     required_time(dataset.captured_at)?;
+    if dataset.dataset == "calendar" && !valid_guild_calendar_payload(&dataset.payload) {
+        return Err(IngestError::CalendarPrivacy);
+    }
     Ok(())
 }
 
@@ -295,6 +322,157 @@ fn validate_source_character(source: &RawSourceCharacter) -> Result<(), IngestEr
         return Err(IngestError::DatasetMismatch);
     }
     Ok(())
+}
+
+fn valid_guild_calendar_event(value: &Value, opened: bool) -> bool {
+    let Some(record) = value.as_object() else {
+        return false;
+    };
+    let allowed = if opened {
+        ["info", "invites", "observedAt", "privacyClass"].as_slice()
+    } else {
+        ["monthOffset", "day", "index", "info", "privacyClass"].as_slice()
+    };
+    if record.len() != allowed.len() || record.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return false;
+    }
+    if record.get("privacyClass").and_then(Value::as_str) != Some("guild") {
+        return false;
+    }
+    let Some(info) = record.get("info").and_then(Value::as_object) else {
+        return false;
+    };
+    if !matches!(
+        info.get("calendarType").and_then(Value::as_str),
+        Some("GUILD_EVENT" | "GUILD_ANNOUNCEMENT")
+    ) {
+        return false;
+    }
+    if opened {
+        return record
+            .get("invites")
+            .and_then(Value::as_array)
+            .is_some_and(|invites| invites.len() <= 100)
+            && record
+                .get("observedAt")
+                .and_then(Value::as_f64)
+                .is_some_and(|value| value.is_finite() && value >= 0.0);
+    }
+    record
+        .get("monthOffset")
+        .and_then(Value::as_i64)
+        .is_some_and(|value| (-24..=24).contains(&value))
+        && record
+            .get("day")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| (1..=31).contains(&value))
+        && record
+            .get("index")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| (1..=100).contains(&value))
+}
+
+fn valid_calendar_month(value: &Value) -> bool {
+    let Some(month) = value.as_object() else {
+        return false;
+    };
+    if month
+        .keys()
+        .any(|key| !matches!(key.as_str(), "month" | "year" | "numDays" | "firstWeekday"))
+    {
+        return false;
+    }
+    month
+        .get("month")
+        .and_then(Value::as_u64)
+        .is_some_and(|value| (1..=12).contains(&value))
+        && month
+            .get("year")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| (2_000..=2_200).contains(&value))
+        && match month.get("numDays") {
+            None => true,
+            Some(value) => value
+                .as_u64()
+                .is_some_and(|value| (28..=31).contains(&value)),
+        }
+        && match month.get("firstWeekday") {
+            None => true,
+            Some(value) => value.as_u64().is_some_and(|value| (1..=7).contains(&value)),
+        }
+}
+
+fn valid_calendar_initialization(initialization: &serde_json::Map<String, Value>) -> bool {
+    initialization
+        .iter()
+        .all(|(key, value)| match key.as_str() {
+            "status" => value
+                .as_str()
+                .is_some_and(|value| value.chars().count() <= 40),
+            "observedAt" | "readyAt" => value
+                .as_f64()
+                .is_some_and(|value| value.is_finite() && value >= 0.0),
+            "openSupported" | "openRequested" | "retainedLastGood" | "interactionRequired" => {
+                value.is_boolean()
+            }
+            "lastGoodCapturedAt" => {
+                value
+                    .as_f64()
+                    .is_some_and(|value| value.is_finite() && value >= 0.0)
+                    || value
+                        .as_str()
+                        .is_some_and(|value| value.chars().count() <= 64)
+            }
+            _ => false,
+        })
+}
+
+fn valid_guild_calendar_payload(value: &Value) -> bool {
+    let Some(payload) = value.as_object() else {
+        return false;
+    };
+    if payload.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "months"
+                | "events"
+                | "guildEvents"
+                | "lastOpenedEvent"
+                | "openedEventDetails"
+                | "initialization"
+        )
+    }) {
+        return false;
+    }
+    let (Some(months), Some(events), Some(guild_events), Some(opened), Some(initialization)) = (
+        payload.get("months").and_then(Value::as_array),
+        payload.get("events").and_then(Value::as_array),
+        payload.get("guildEvents").and_then(Value::as_array),
+        payload.get("openedEventDetails").and_then(Value::as_object),
+        payload.get("initialization").and_then(Value::as_object),
+    ) else {
+        return false;
+    };
+    if months.len() > 24
+        || !months.iter().all(valid_calendar_month)
+        || events.len() > 1_400
+        || guild_events.len() > 1_400
+        || events != guild_events
+        || !events
+            .iter()
+            .all(|event| valid_guild_calendar_event(event, false))
+        || opened.len() > 200
+        || !opened
+            .values()
+            .all(|event| valid_guild_calendar_event(event, true))
+        || !valid_calendar_initialization(initialization)
+    {
+        return false;
+    }
+    match payload.get("lastOpenedEvent") {
+        None => true,
+        Some(event) => event.is_null() || valid_guild_calendar_event(event, true),
+    }
 }
 
 fn normalize_dataset(
@@ -817,6 +995,90 @@ mod tests {
             );
         }
         assert!(result.queued >= 25);
+    }
+
+    #[test]
+    fn quarantined_calendar_is_visible_without_blocking_safe_datasets() {
+        let source = String::from_utf8_lossy(include_bytes!(
+            "../../../tests/addon/fixtures/EmberSync.lua"
+        ))
+        .replacen(
+            "[\"calendarType\"] = \"GUILD_EVENT\"",
+            "[\"calendarType\"] = \"PLAYER\"",
+            1,
+        );
+        let path = tempdir().unwrap().keep().join("queue.db");
+        let queue = QueueStore::open(&path).unwrap();
+        queue
+            .unlock_with_passphrase("a secure test passphrase")
+            .unwrap();
+        let result = Ingestor::new(queue)
+            .ingest_bytes(Path::new("EmberSync.lua"), source.as_bytes(), false)
+            .unwrap();
+        assert!(result.queued > 0);
+        let calendar = result
+            .coverage
+            .iter()
+            .find(|row| row.dataset == "calendar")
+            .expect("calendar quarantine must be visible");
+        assert!(matches!(calendar.status, CoverageStatus::Forbidden));
+        assert_eq!(
+            calendar.reason.as_deref(),
+            Some("calendar_privacy_quarantined")
+        );
+    }
+
+    #[test]
+    fn calendar_payload_validation_quarantines_personal_and_legacy_shapes() {
+        let guild_event = serde_json::json!({
+            "monthOffset": 0,
+            "day": 23,
+            "index": 1,
+            "privacyClass": "guild",
+            "info": {
+                "calendarType": "GUILD_EVENT",
+                "title": "Guild event"
+            }
+        });
+        let safe = serde_json::json!({
+            "months": [{"month": 7, "year": 2026, "numDays": 31}],
+            "events": [guild_event.clone()],
+            "guildEvents": [guild_event.clone()],
+            "openedEventDetails": {},
+            "initialization": {"openSupported": true, "openRequested": true}
+        });
+        assert!(valid_guild_calendar_payload(&safe));
+        let mut personal_root = safe.clone();
+        personal_root["personalEvents"] = serde_json::json!([{
+            "privacyClass": "personal",
+            "info": {"calendarType": "PLAYER", "title": "Private invitation"}
+        }]);
+        assert!(!valid_guild_calendar_payload(&personal_root));
+        let mut mislabeled = safe.clone();
+        mislabeled["events"][0]["info"]["calendarType"] = serde_json::json!("PLAYER");
+        assert!(!valid_guild_calendar_payload(&mislabeled));
+        let mut extra_record_key = safe.clone();
+        extra_record_key["events"][0]["private"] = serde_json::json!(true);
+        extra_record_key["guildEvents"] = extra_record_key["events"].clone();
+        assert!(!valid_guild_calendar_payload(&extra_record_key));
+        let mut invalid_month = safe.clone();
+        invalid_month["months"][0]["month"] = serde_json::json!(13);
+        assert!(!valid_guild_calendar_payload(&invalid_month));
+        let mut invalid_initialization = safe.clone();
+        invalid_initialization["initialization"]["openSupported"] = serde_json::json!("yes");
+        assert!(!valid_guild_calendar_payload(&invalid_initialization));
+        let mut excessive_invites = safe.clone();
+        excessive_invites["lastOpenedEvent"] = serde_json::json!({
+            "info": {"calendarType": "GUILD_EVENT", "title": "Guild event"},
+            "invites": (0..101).collect::<Vec<_>>(),
+            "observedAt": 1,
+            "privacyClass": "guild"
+        });
+        assert!(!valid_guild_calendar_payload(&excessive_invites));
+        assert!(!valid_guild_calendar_payload(&serde_json::json!({
+            "months": [],
+            "events": []
+        })));
     }
 
     #[test]

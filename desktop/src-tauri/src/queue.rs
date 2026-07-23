@@ -27,6 +27,7 @@ const VAULT_MODE_META: &str = "vault_mode";
 const VAULT_INITIALIZED_META: &str = "vault_initialized";
 const VAULT_MODE_OS: &str = "os";
 const VAULT_MODE_PASSPHRASE: &str = "passphrase";
+const GUILD_ONLY_CALENDAR_QUEUE_MIGRATION: &str = "guild_only_calendar_queue_v1";
 const RECEIPT_SCHEMA_EPOCH: i64 = 2;
 const NEVER_RETRY_AT: i64 = i64::MAX;
 const LEGACY_REAUTH_ERROR: &str =
@@ -137,6 +138,7 @@ impl QueueStore {
         }
         migrate_legacy_authorization_failures(&connection)?;
         reconcile_dataset_rows(&connection)?;
+        purge_pre_guild_only_calendar_queue(&connection)?;
         Ok(Arc::new(Self {
             connection: Mutex::new(connection),
             key: Mutex::new(None),
@@ -853,6 +855,26 @@ fn migrate_legacy_authorization_failures(connection: &Connection) -> Result<(), 
     Ok(())
 }
 
+fn purge_pre_guild_only_calendar_queue(connection: &Connection) -> Result<(), QueueError> {
+    let complete: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM vault_meta WHERE key=?1)",
+        [GUILD_ONLY_CALENDAR_QUEUE_MIGRATION],
+        |row| row.get(0),
+    )?;
+    if complete {
+        return Ok(());
+    }
+    // Calendar payloads queued before v0.1.5 can contain personal invitations
+    // inside otherwise encrypted state. They are removed without decryption;
+    // a current SavedVariables scan will enqueue the new guild-only payload.
+    connection.execute("DELETE FROM upload_queue WHERE dataset='calendar'", [])?;
+    connection.execute(
+        "INSERT INTO vault_meta(key,value) VALUES(?1,'complete')",
+        [GUILD_ONLY_CALENDAR_QUEUE_MIGRATION],
+    )?;
+    Ok(())
+}
+
 fn reconcile_dataset_rows(connection: &Connection) -> Result<(), QueueError> {
     let authorization_error: Option<String> = connection
         .query_row(
@@ -998,6 +1020,46 @@ mod tests {
             .query_row("SELECT ciphertext FROM upload_queue", [], |row| row.get(0))
             .unwrap();
         assert!(!String::from_utf8_lossy(&ciphertext).contains("new"));
+    }
+
+    #[test]
+    fn upgrade_purges_pre_guild_only_calendar_ciphertext_once() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        {
+            let store = QueueStore::open(&path).unwrap();
+            *store.key.lock() = Some(Zeroizing::new([7_u8; 32]));
+            let mut calendar = envelope(1, "private invitation", DatasetKind::State);
+            calendar.dataset = "calendar".into();
+            assert!(store.enqueue(&calendar).unwrap());
+            store
+                .connection
+                .lock()
+                .execute(
+                    "DELETE FROM vault_meta WHERE key=?1",
+                    [GUILD_ONLY_CALENDAR_QUEUE_MIGRATION],
+                )
+                .unwrap();
+        }
+        let reopened = QueueStore::open(&path).unwrap();
+        let connection = reopened.connection.lock();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM upload_queue WHERE dataset='calendar'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0,
+        );
+        assert!(connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM vault_meta WHERE key=?1)",
+                [GUILD_ONLY_CALENDAR_QUEUE_MIGRATION],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap());
     }
 
     #[test]

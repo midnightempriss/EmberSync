@@ -326,14 +326,20 @@ function GuildBank:Collect(context)
                     end
                     local itemLink = type(_G.GetGuildBankItemLink) == "function"
                         and _G.GetGuildBankItemLink(tabIndex, slot) or nil
-                    if itemLink or texture then
+                    local safeItemLink = Util.SafeString(itemLink, false)
+                    local safeTexture = Util.SafeNumber(texture)
+                    local itemID = safeItemLink
+                        and tonumber(string.match(safeItemLink, "|Hitem:(%d+)")) or nil
+                    if safeItemLink or safeTexture then
                         tab.items[slot] = {
-                            itemLink = itemLink,
-                            texture = texture,
-                            count = itemCount,
-                            isLocked = isLocked,
-                            isFiltered = isFiltered,
-                            quality = quality,
+                            itemID = itemID,
+                            itemLink = safeItemLink,
+                            iconFileID = safeTexture,
+                            texture = safeTexture,
+                            count = Util.SafeNumber(itemCount),
+                            isLocked = Util.SafeBoolean(isLocked),
+                            isFiltered = Util.SafeBoolean(isFiltered),
+                            quality = Util.SafeNumber(quality),
                         }
                     end
                 end

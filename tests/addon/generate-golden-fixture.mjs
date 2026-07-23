@@ -413,10 +413,20 @@ function createSanitizer(referenceCapturedAt) {
   return { sanitizeValue, syntheticGuid };
 }
 
-function normalizeCalendarPayload(payload) {
-  if (!isRecord(payload) || !Array.isArray(payload.events)) return;
-  payload.events.forEach((event, index) => {
+function normalizeCalendarPayload(payload, coverage) {
+  if (!isRecord(payload)) return;
+  const sourceEvents = Array.isArray(payload.events)
+    ? payload.events
+    : Array.isArray(payload.guildEvents)
+      ? payload.guildEvents
+      : [];
+  const guildEvents = sourceEvents.filter((event) =>
+    isRecord(event)
+      && isRecord(event.info)
+      && ["GUILD_EVENT", "GUILD_ANNOUNCEMENT"].includes(event.info.calendarType));
+  guildEvents.forEach((event, index) => {
     if (!isRecord(event) || !isRecord(event.info)) return;
+    event.privacyClass = "guild";
     const startTime = isRecord(event.info.startTime) ? event.info.startTime : null;
     const endTime = isRecord(event.info.endTime) ? event.info.endTime : null;
     const day = 24 + index;
@@ -429,6 +439,50 @@ function normalizeCalendarPayload(payload) {
     event.day = day;
     event.monthOffset = 0;
   });
+  payload.events = guildEvents;
+  payload.guildEvents = structuredClone(guildEvents);
+  delete payload.personalEvents;
+  delete payload.globalEvents;
+
+  if (!isRecord(payload.lastOpenedEvent)
+    || !isRecord(payload.lastOpenedEvent.info)
+    || !["GUILD_EVENT", "GUILD_ANNOUNCEMENT"].includes(
+      payload.lastOpenedEvent.info.calendarType,
+    )) {
+    delete payload.lastOpenedEvent;
+  } else {
+    payload.lastOpenedEvent.privacyClass = "guild";
+  }
+
+  const openedEventDetails = isRecord(payload.openedEventDetails)
+    ? payload.openedEventDetails
+    : {};
+  payload.openedEventDetails = Object.fromEntries(
+    Object.entries(openedEventDetails)
+      .filter(([, detail]) =>
+        isRecord(detail)
+          && isRecord(detail.info)
+          && ["GUILD_EVENT", "GUILD_ANNOUNCEMENT"].includes(
+            detail.info.calendarType,
+          ))
+      .map(([key, detail]) => [key, { ...detail, privacyClass: "guild" }]),
+  );
+  payload.initialization = isRecord(payload.initialization)
+    ? payload.initialization
+    : {
+        openSupported: true,
+        openRequested: true,
+        readyAt: FIXTURE_INSTANT,
+      };
+
+  if (isRecord(coverage)) {
+    coverage.eventCount = guildEvents.length;
+    coverage.guildEventCount = guildEvents.length;
+    coverage.openedEventDetailCount = Object.keys(payload.openedEventDetails).length;
+    delete coverage.excludedNonGuildEventCount;
+    delete coverage.personalEventCount;
+    delete coverage.globalEventCount;
+  }
 }
 
 function normalizeExport(database, guildKey, sanitizer) {
@@ -490,7 +544,7 @@ function normalizeExport(database, guildKey, sanitizer) {
     if (isRecord(envelope.coverage)) {
       envelope.coverage.observedAt = envelope.capturedAt;
     }
-    if (dataset === "calendar") normalizeCalendarPayload(envelope.payload);
+    if (dataset === "calendar") normalizeCalendarPayload(envelope.payload, envelope.coverage);
     const storageKey = scope === "guild" || scope === "account"
       ? dataset
       : `${dataset}:${subjectId}`;
@@ -549,7 +603,16 @@ function buildFixture(database) {
   const exports = {};
   for (const guildKey of ["main", "alt"]) {
     const guildExport = normalizeExport(database, guildKey, sanitizer);
-    if (guildExport) exports[guildKey] = guildExport;
+    if (guildExport) {
+      exports[guildKey] = guildExport;
+      const calendar = Object.values(guildExport.datasets)
+        .find((envelope) => envelope.dataset === "calendar");
+      if (calendar && counts[guildKey]) {
+        counts[guildKey].calendarEvents = Array.isArray(calendar.payload?.events)
+          ? calendar.payload.events.length
+          : 0;
+      }
+    }
   }
   const observedDatasets = new Set(
     Object.values(exports).flatMap((guildExport) =>

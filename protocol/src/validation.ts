@@ -4,7 +4,7 @@ import {
   isGuildKey,
   type CanonicalGuildIdentity,
 } from "./guilds.js";
-import { isSha256Hex } from "./canonical.js";
+import { canonicalJson, isSha256Hex } from "./canonical.js";
 import {
   COVERAGE_STATUSES,
   type AddonDatasetEnvelopeV1,
@@ -155,6 +155,224 @@ export function isJsonValue(
   };
 
   return visit(value, 0);
+}
+
+const GUILD_CALENDAR_TYPES = new Set(["GUILD_EVENT", "GUILD_ANNOUNCEMENT"]);
+
+function validateGuildCalendarEvent(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+  opened: boolean,
+): boolean {
+  if (!isRecord(value)) {
+    issue(issues, path, "calendar_privacy", "Calendar records must be objects");
+    return false;
+  }
+  exactKeys(
+    value,
+    opened
+      ? ["info", "invites", "observedAt", "privacyClass"]
+      : ["monthOffset", "day", "index", "info", "privacyClass"],
+    opened
+      ? ["info", "invites", "observedAt", "privacyClass"]
+      : ["monthOffset", "day", "index", "info", "privacyClass"],
+    path,
+    issues,
+  );
+  let valid = true;
+  if (value["privacyClass"] !== "guild") {
+    issue(issues, `${path}.privacyClass`, "calendar_privacy", "Only guild calendar records are permitted");
+    valid = false;
+  }
+  if (!isRecord(value["info"])
+    || !GUILD_CALENDAR_TYPES.has(String(value["info"]["calendarType"]))) {
+    issue(
+      issues,
+      `${path}.info.calendarType`,
+      "calendar_privacy",
+      "calendarType must be GUILD_EVENT or GUILD_ANNOUNCEMENT",
+    );
+    valid = false;
+  }
+  if (opened) {
+    if (!Array.isArray(value["invites"]) || value["invites"].length > 100
+      || !value["invites"].every((invite) => isJsonValue(invite))) {
+      issue(issues, `${path}.invites`, "calendar_format", "Guild event invites must be a bounded JSON array");
+      valid = false;
+    }
+    if (typeof value["observedAt"] !== "number" || !Number.isFinite(value["observedAt"])
+      || value["observedAt"] < 0) {
+      issue(issues, `${path}.observedAt`, "calendar_format", "observedAt must be a non-negative number");
+      valid = false;
+    }
+  } else {
+    if (!Number.isSafeInteger(value["monthOffset"]) || (value["monthOffset"] as number) < -24
+      || (value["monthOffset"] as number) > 24) {
+      issue(issues, `${path}.monthOffset`, "calendar_format", "monthOffset is out of range");
+      valid = false;
+    }
+    if (!isSafePositiveInteger(value["day"]) || value["day"] > 31) {
+      issue(issues, `${path}.day`, "calendar_format", "day is out of range");
+      valid = false;
+    }
+    if (!isSafePositiveInteger(value["index"]) || value["index"] > 100) {
+      issue(issues, `${path}.index`, "calendar_format", "index is out of range");
+      valid = false;
+    }
+  }
+  return valid;
+}
+
+function validateGuildCalendarPayload(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): boolean {
+  if (!isRecord(value)) {
+    issue(issues, path, "calendar_privacy", "Calendar payload must be a guild-only object");
+    return false;
+  }
+  exactKeys(
+    value,
+    ["months", "events", "guildEvents", "lastOpenedEvent", "openedEventDetails", "initialization"],
+    ["months", "events", "guildEvents", "openedEventDetails", "initialization"],
+    path,
+    issues,
+  );
+  let valid = true;
+  if (!Array.isArray(value["months"]) || value["months"].length > 24) {
+    issue(issues, `${path}.months`, "calendar_format", "Calendar months must be a bounded array");
+    valid = false;
+  } else {
+    value["months"].forEach((month, index) => {
+      const monthPath = `${path}.months[${index}]`;
+      if (!isRecord(month)) {
+        issue(issues, monthPath, "calendar_format", "Calendar month must be an object");
+        valid = false;
+        return;
+      }
+      exactKeys(month, ["month", "year", "numDays", "firstWeekday"], ["month", "year"], monthPath, issues);
+      if (!isSafePositiveInteger(month["month"]) || month["month"] > 12
+        || !Number.isSafeInteger(month["year"]) || (month["year"] as number) < 2000
+        || (month["year"] as number) > 2200) {
+        issue(issues, monthPath, "calendar_format", "Calendar month and year are out of range");
+        valid = false;
+      }
+      if (month["numDays"] !== undefined
+        && (!Number.isSafeInteger(month["numDays"]) || (month["numDays"] as number) < 28
+          || (month["numDays"] as number) > 31)) {
+        issue(issues, `${monthPath}.numDays`, "calendar_format", "numDays is out of range");
+        valid = false;
+      }
+      if (month["firstWeekday"] !== undefined
+        && (!isSafePositiveInteger(month["firstWeekday"]) || month["firstWeekday"] > 7)) {
+        issue(issues, `${monthPath}.firstWeekday`, "calendar_format", "firstWeekday is out of range");
+        valid = false;
+      }
+    });
+  }
+  for (const key of ["events", "guildEvents"] as const) {
+    const records = value[key];
+    if (!Array.isArray(records) || records.length > 1400) {
+      issue(issues, `${path}.${key}`, "calendar_format", `${key} must be a bounded array`);
+      valid = false;
+      continue;
+    }
+    records.forEach((record, index) => {
+      if (!validateGuildCalendarEvent(record, `${path}.${key}[${index}]`, issues, false)) valid = false;
+    });
+  }
+  if (
+    Array.isArray(value["events"])
+    && Array.isArray(value["guildEvents"])
+    && isJsonValue(value["events"])
+    && isJsonValue(value["guildEvents"])
+    && canonicalJson(value["events"]) !== canonicalJson(value["guildEvents"])
+  ) {
+    issue(
+      issues,
+      `${path}.guildEvents`,
+      "calendar_format",
+      "events and guildEvents must be identical guild-only arrays",
+    );
+    valid = false;
+  }
+  if (value["lastOpenedEvent"] !== undefined && value["lastOpenedEvent"] !== null
+    && !validateGuildCalendarEvent(value["lastOpenedEvent"], `${path}.lastOpenedEvent`, issues, true)) {
+    valid = false;
+  }
+  if (!isRecord(value["openedEventDetails"]) || Object.keys(value["openedEventDetails"]).length > 200) {
+    issue(issues, `${path}.openedEventDetails`, "calendar_format", "openedEventDetails must be a bounded object");
+    valid = false;
+  } else {
+    for (const [key, record] of Object.entries(value["openedEventDetails"])) {
+      if (!validateGuildCalendarEvent(record, `${path}.openedEventDetails.${key}`, issues, true)) valid = false;
+    }
+  }
+  if (!isRecord(value["initialization"])) {
+    issue(issues, `${path}.initialization`, "calendar_format", "initialization must be an object");
+    valid = false;
+  } else {
+    const initialization = value["initialization"];
+    exactKeys(
+      initialization,
+      [
+        "status",
+        "observedAt",
+        "readyAt",
+        "openSupported",
+        "openRequested",
+        "retainedLastGood",
+        "lastGoodCapturedAt",
+        "interactionRequired",
+      ],
+      [],
+      `${path}.initialization`,
+      issues,
+    );
+    if (!isJsonValue(initialization)) {
+      issue(issues, `${path}.initialization`, "calendar_format", "initialization must contain bounded JSON values");
+      valid = false;
+    }
+    for (const [key, candidate] of Object.entries(initialization)) {
+      const fieldPath = `${path}.initialization.${key}`;
+      let fieldValid = false;
+      if (key === "status") {
+        fieldValid = typeof candidate === "string" && candidate.length <= 40;
+      } else if (key === "observedAt" || key === "readyAt") {
+        fieldValid = typeof candidate === "number"
+          && Number.isFinite(candidate)
+          && candidate >= 0;
+      } else if (
+        key === "openSupported"
+        || key === "openRequested"
+        || key === "retainedLastGood"
+        || key === "interactionRequired"
+      ) {
+        fieldValid = typeof candidate === "boolean";
+      } else if (key === "lastGoodCapturedAt") {
+        fieldValid = (
+          typeof candidate === "number"
+          && Number.isFinite(candidate)
+          && candidate >= 0
+        ) || (
+          typeof candidate === "string"
+          && candidate.length <= 64
+        );
+      }
+      if (!fieldValid) {
+        issue(
+          issues,
+          fieldPath,
+          "calendar_format",
+          "initialization field has an invalid type or value",
+        );
+        valid = false;
+      }
+    }
+  }
+  return valid;
 }
 
 function validateEventBatchPayload(
@@ -609,6 +827,10 @@ function validateAddonDatasetEnvelope(
     issue(issues, `${path}.payload`, "json_value", "payload must be bounded JSON data");
     valid = false;
   }
+  if (value["dataset"] === "calendar"
+    && !validateGuildCalendarPayload(value["payload"], `${path}.payload`, issues)) {
+    valid = false;
+  }
   return valid;
 }
 
@@ -931,6 +1153,9 @@ export function validateDatasetEnvelopeV1(input: unknown): ValidationResult<Data
   if (input["permissionEvidence"] !== undefined) validatePermissionEvidence(input["permissionEvidence"], "$.permissionEvidence", issues);
   if (!isSha256Hex(input["payloadHash"])) issue(issues, "$.payloadHash", "format", "Expected lowercase SHA-256 hex");
   if (!isJsonValue(input["payload"])) issue(issues, "$.payload", "json_value", "payload must be bounded JSON data");
+  if (input["dataset"] === "calendar") {
+    validateGuildCalendarPayload(input["payload"], "$.payload", issues);
+  }
 
   return issues.length === 0
     ? { ok: true, value: input as unknown as DatasetEnvelopeV1 }

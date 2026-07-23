@@ -7,7 +7,7 @@ end
 _G.EmberSync = EmberSync
 
 EmberSync.name = ADDON_NAME or "EmberSync"
-EmberSync.version = "0.1.4"
+EmberSync.version = "0.1.5"
 EmberSync.modules = EmberSync.modules or {}
 EmberSync.collectors = EmberSync.collectors or {}
 EmberSync.listeners = EmberSync.listeners or {}
