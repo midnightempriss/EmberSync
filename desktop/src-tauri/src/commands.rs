@@ -1,4 +1,7 @@
-use crate::{models::*, state::AppState};
+use crate::{
+    models::*,
+    state::{AppState, SyncTrigger},
+};
 use serde::Serialize;
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
@@ -56,47 +59,7 @@ pub async fn scan_now(app: AppHandle, state: State<'_, AppState>) -> Result<Desk
 
 #[tauri::command]
 pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<DesktopStatus, String> {
-    let paired =
-        state.config().snapshot().paired_device.ok_or_else(|| {
-            "Connect this device to rainingembers.org before syncing.".to_string()
-        })?;
-    // Only an explicit user action releases uploads paused after the website
-    // requested fresh Battle.net verification. Background watcher activity
-    // must never turn that policy failure into a retry storm.
-    state
-        .queue()
-        .release_authorization_required()
-        .map_err(|error| error.to_string())?;
-    state.update_connection(ConnectionState::Connecting);
-    state.emit(&app);
-    match state.api().process_queue(&paired).await {
-        Ok(count) => {
-            state.update_connection(ConnectionState::Paired);
-            if count > 0 {
-                state.set_last_upload_now();
-            }
-            state.diagnostic(
-                DiagnosticLevel::Info,
-                format!(
-                    "Completed {count} encrypted upload{}.",
-                    if count == 1 { "" } else { "s" }
-                ),
-            );
-            state.emit(&app);
-            Ok(state.status())
-        }
-        Err(error) => {
-            // A failed upload does not silently unpair the device. The queue
-            // retains the actionable failure and the user can reverify or retry.
-            state.update_connection(ConnectionState::Paired);
-            state.diagnostic(
-                DiagnosticLevel::Error,
-                format!("Website sync failed safely: {error}"),
-            );
-            state.emit(&app);
-            Err(error.to_string())
-        }
-    }
+    state.sync_queue(&app, SyncTrigger::Manual).await
 }
 
 #[tauri::command]
@@ -160,21 +123,39 @@ pub async fn revoke_device(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<DesktopStatus, String> {
-    if let Some(paired) = state.config().snapshot().paired_device {
-        state
-            .api()
-            .revoke(&paired)
-            .await
-            .map_err(|error| error.to_string())?;
+    let paired = state.config().snapshot().paired_device;
+    if let Some(paired) = paired.as_ref() {
+        if let Err(error) = state.api().revoke(paired).await {
+            if error.confirms_device_is_inactive() {
+                state.diagnostic(
+                    DiagnosticLevel::Warning,
+                    "The website had already revoked this device; EmberSync removed the stale local connection.".into(),
+                );
+            } else {
+                state.diagnostic(
+                    DiagnosticLevel::Error,
+                    format!("Website device revocation failed safely: {error}"),
+                );
+                state.emit(&app);
+                return Err(error.to_string());
+            }
+        }
     }
     state
         .config()
-        .set_paired_device(None)
+        .clear_pairing()
         .map_err(|error| error.to_string())?;
-    state
-        .config()
-        .set_pending_pairing(None)
-        .map_err(|error| error.to_string())?;
+    if paired.is_some() {
+        if let Err(error) = state.api().forget_signing_key() {
+            // The server and local connection are already revoked. A stale key
+            // is encrypted at rest and cannot authorize a revoked device, so a
+            // cleanup failure should not make the Revoke button appear broken.
+            state.diagnostic(
+                DiagnosticLevel::Warning,
+                format!("The device was revoked, but its obsolete local signing key could not be removed: {error}"),
+            );
+        }
+    }
     state.refresh_pairing_status();
     state.diagnostic(
         DiagnosticLevel::Info,

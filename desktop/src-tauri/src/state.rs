@@ -17,6 +17,75 @@ use std::{
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+const MAX_DRAIN_BATCHES: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DrainStep {
+    Done,
+    Continue,
+    ContinueLater,
+}
+
+fn next_drain_step(has_ready_work: bool, batches_completed: usize) -> DrainStep {
+    if !has_ready_work {
+        DrainStep::Done
+    } else if batches_completed >= MAX_DRAIN_BATCHES {
+        DrainStep::ContinueLater
+    } else {
+        DrainStep::Continue
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncTrigger {
+    Manual,
+    Tray,
+    Watcher,
+    Startup,
+    Continuation,
+}
+
+impl SyncTrigger {
+    fn is_user_initiated(self) -> bool {
+        matches!(self, Self::Manual | Self::Tray)
+    }
+
+    fn success_message(self, count: usize) -> String {
+        let noun = if count == 1 { "segment" } else { "segments" };
+        match self {
+            Self::Manual | Self::Tray => {
+                format!("Completed {count} encrypted upload {noun}.")
+            }
+            Self::Watcher | Self::Startup | Self::Continuation => {
+                format!("Automatically uploaded {count} encrypted {noun}.")
+            }
+        }
+    }
+
+    fn failure_message(self, error: &str) -> String {
+        match self {
+            Self::Manual | Self::Tray => format!("Website sync failed safely: {error}"),
+            Self::Watcher | Self::Startup | Self::Continuation => {
+                format!("Automatic sync deferred safely: {error}")
+            }
+        }
+    }
+}
+
+struct SingleFlightGuard<'a>(&'a AtomicBool);
+
+impl Drop for SingleFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+fn try_acquire_single_flight(flag: &AtomicBool) -> Option<SingleFlightGuard<'_>> {
+    flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .ok()
+        .map(|_| SingleFlightGuard(flag))
+}
+
 #[derive(Clone)]
 pub struct AppState(Arc<AppStateInner>);
 
@@ -105,7 +174,7 @@ impl AppState {
             .watcher
             .start(roots, move || {
                 let _ = state.scan(&callback_app);
-                state.schedule_background_sync(callback_app.clone());
+                state.schedule_sync(callback_app.clone(), SyncTrigger::Watcher);
             })
             .map_err(|error| error.to_string())?;
         self.0.status.write().watcher_running = true;
@@ -240,50 +309,107 @@ impl AppState {
     pub fn update_connection(&self, connection: ConnectionState) {
         self.0.status.write().connection = connection;
     }
-    pub fn schedule_background_sync(&self, app: AppHandle) {
-        if !self.0.queue.is_unlocked()
-            || self
-                .0
-                .sync_in_progress
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-        {
-            return;
-        }
-        let Some(paired) = self.0.config.snapshot().paired_device else {
-            self.0.sync_in_progress.store(false, Ordering::Release);
-            return;
-        };
+    pub fn schedule_sync(&self, app: AppHandle, trigger: SyncTrigger) {
         let state = self.clone();
         tauri::async_runtime::spawn(async move {
-            match state.api().process_queue(&paired).await {
+            let _ = state.sync_queue(&app, trigger).await;
+        });
+    }
+
+    pub async fn sync_queue(
+        &self,
+        app: &AppHandle,
+        trigger: SyncTrigger,
+    ) -> Result<DesktopStatus, String> {
+        let Some(flight) = try_acquire_single_flight(&self.0.sync_in_progress) else {
+            return Err(
+                "A sync is already in progress; EmberSync did not start a duplicate upload.".into(),
+            );
+        };
+        if !self.0.queue.is_unlocked() {
+            return Err("Unlock the encrypted local vault before syncing.".into());
+        }
+        let paired = self.0.config.snapshot().paired_device.ok_or_else(|| {
+            "Connect this device to rainingembers.org before syncing.".to_string()
+        })?;
+
+        // Only a deliberate user action releases uploads paused after the
+        // website requested fresh Battle.net verification. Watcher and startup
+        // activity must never turn that policy failure into a retry storm.
+        if trigger.is_user_initiated() {
+            self.0
+                .queue
+                .release_authorization_required()
+                .map_err(|error| error.to_string())?;
+            self.update_connection(ConnectionState::Connecting);
+            self.emit(app);
+        }
+
+        let mut uploaded = 0;
+        let mut reached_drain_limit = false;
+        for batch_index in 0..MAX_DRAIN_BATCHES {
+            match self.0.api.process_queue(&paired).await {
                 Ok(count) => {
-                    state.update_connection(ConnectionState::Paired);
-                    if count > 0 {
-                        state.set_last_upload_now();
-                        state.diagnostic(
-                            DiagnosticLevel::Info,
-                            format!(
-                                "Automatically uploaded {count} encrypted segment{}.",
-                                if count == 1 { "" } else { "s" }
-                            ),
-                        );
+                    uploaded += count;
+                    let has_ready_work = match self.0.queue.has_ready_now() {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.refresh_pairing_status();
+                            self.diagnostic(
+                                if trigger.is_user_initiated() {
+                                    DiagnosticLevel::Error
+                                } else {
+                                    DiagnosticLevel::Warning
+                                },
+                                trigger.failure_message(&error.to_string()),
+                            );
+                            self.emit(app);
+                            return Err(error.to_string());
+                        }
+                    };
+                    match next_drain_step(has_ready_work, batch_index + 1) {
+                        DrainStep::Done => break,
+                        DrainStep::Continue => tokio::task::yield_now().await,
+                        DrainStep::ContinueLater => {
+                            reached_drain_limit = true;
+                            break;
+                        }
                     }
                 }
                 Err(error) => {
-                    // Upload availability and pairing are separate states. Keep
-                    // the device visibly paired while the encrypted queue records
-                    // whether a retry or fresh Battle.net verification is needed.
-                    state.update_connection(ConnectionState::Paired);
-                    state.diagnostic(
-                        DiagnosticLevel::Warning,
-                        format!("Automatic sync deferred safely: {error}"),
+                    // Upload availability and pairing are separate states. The
+                    // encrypted queue records whether a retry or fresh Battle.net
+                    // verification is needed without silently dropping pairing.
+                    self.refresh_pairing_status();
+                    self.diagnostic(
+                        if trigger.is_user_initiated() {
+                            DiagnosticLevel::Error
+                        } else {
+                            DiagnosticLevel::Warning
+                        },
+                        trigger.failure_message(&error.to_string()),
                     );
+                    self.emit(app);
+                    return Err(error.to_string());
                 }
             }
-            state.0.sync_in_progress.store(false, Ordering::Release);
-            state.emit(&app);
-        });
+        }
+
+        self.refresh_pairing_status();
+        if uploaded > 0 {
+            self.set_last_upload_now();
+            self.diagnostic(DiagnosticLevel::Info, trigger.success_message(uploaded));
+        }
+        self.emit(app);
+
+        // Bound each worker so a continuously changing SavedVariables file cannot
+        // monopolize the async runtime. A continuation reacquires the same global
+        // single-flight guard after this worker has fully released it.
+        drop(flight);
+        if reached_drain_limit {
+            self.schedule_sync(app.clone(), SyncTrigger::Continuation);
+        }
+        Ok(self.status())
     }
     pub fn refresh_pairing_status(&self) {
         let config = self.0.config.snapshot();
@@ -328,5 +454,31 @@ impl Ord for GuildKey {
 impl PartialOrd for GuildKey {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_flight_rejects_overlap_and_releases_on_drop() {
+        let flag = AtomicBool::new(false);
+        let first = try_acquire_single_flight(&flag).expect("first worker acquires the guard");
+        assert!(try_acquire_single_flight(&flag).is_none());
+        drop(first);
+        assert!(try_acquire_single_flight(&flag).is_some());
+    }
+
+    #[test]
+    fn drain_continues_while_work_is_ready_and_yields_at_its_bound() {
+        for completed in 1..MAX_DRAIN_BATCHES {
+            assert_eq!(next_drain_step(true, completed), DrainStep::Continue);
+        }
+        assert_eq!(
+            next_drain_step(true, MAX_DRAIN_BATCHES),
+            DrainStep::ContinueLater
+        );
+        assert_eq!(next_drain_step(false, 1), DrainStep::Done);
     }
 }

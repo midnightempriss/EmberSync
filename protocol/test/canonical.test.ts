@@ -20,6 +20,28 @@ test("canonical hashing is stable", async () => {
   assert.equal(await sha256HexUtf8('{"a":1,"b":2}'), expected);
 });
 
+test("canonical JSON follows JCS number formatting and UTF-16 key ordering", () => {
+  assert.equal(
+    canonicalJson({
+      "\ufffd": "replacement",
+      "\ud83d\ude00": "astral",
+      numbers: [
+        -0,
+        1e-7,
+        1e-6,
+        1e15,
+        1e16,
+        1e20,
+        1e21,
+        0.03921568766236305,
+        83.33333587646484,
+        280.0625,
+      ],
+    }),
+    '{"numbers":[0,1e-7,0.000001,1000000000000000,10000000000000000,100000000000000000000,1e+21,0.03921568766236305,83.33333587646484,280.0625],"😀":"astral","�":"replacement"}',
+  );
+});
+
 test("canonical JSON rejects non-JSON and ambiguous structures", () => {
   assert.throws(() => canonicalJson({ bad: Number.NaN }), /NaN/u);
   const sparse: unknown[] = [];

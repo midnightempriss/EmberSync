@@ -66,5 +66,6 @@ Installation and release-maintainer instructions live in
 
 ## Status
 
-Version `0.1.1` adds frame-sliced collection, full guild-neighborhood and
-Endeavor requests, native WoW-folder browsing, and actionable upload recovery.
+Version `0.1.2` repairs website revocation, drains the encrypted queue through
+one safe upload worker, reduces redundant Blizzard verification, and keeps
+Rust/JavaScript payload signing byte-for-byte compatible.

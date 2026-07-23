@@ -14,7 +14,7 @@ mod watcher;
 use api_client::ApiClient;
 use config::ConfigStore;
 use queue::QueueStore;
-use state::AppState;
+use state::{AppState, SyncTrigger};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -44,7 +44,12 @@ pub fn run() {
             build_tray(app.handle())?;
             if std::env::args().any(|argument|argument=="--background"){if let Some(window)=app.get_webview_window("main"){let _=window.hide();}}
             if let Err(error)=state.start_watcher(app.handle().clone()){state.diagnostic(models::DiagnosticLevel::Warning,format!("SavedVariables watcher could not start: {error}"));}
-            let scan_state=state.clone();let scan_app=app.handle().clone();tauri::async_runtime::spawn_blocking(move||{let _=scan_state.scan(&scan_app);});
+            let scan_state=state.clone();let scan_app=app.handle().clone();tauri::async_runtime::spawn_blocking(move||{
+                match scan_state.scan(&scan_app) {
+                    Ok(_) => scan_state.schedule_sync(scan_app, SyncTrigger::Startup),
+                    Err(error) => scan_state.diagnostic(models::DiagnosticLevel::Warning,format!("Startup scan could not complete safely: {error}")),
+                }
+            });
             Ok(())
         })
         .on_window_event(|window,event|{if let WindowEvent::CloseRequested{api,..}=event{api.prevent_close();let _=window.hide();}})
@@ -70,14 +75,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             }
             "sync" => {
                 let state = app.state::<AppState>().inner().clone();
-                let handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let paired = state.config().snapshot().paired_device;
-                    if let Some(paired) = paired {
-                        let _ = state.api().process_queue(&paired).await;
-                        state.emit(&handle);
-                    }
-                });
+                state.schedule_sync(app.clone(), SyncTrigger::Tray);
             }
             "quit" => app.exit(0),
             _ => {}

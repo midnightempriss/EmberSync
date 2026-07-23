@@ -106,11 +106,59 @@ impl ConfigStore {
         self.save()
     }
 
+    /// Clear both halves of the pairing state in a single persisted update.
+    /// The in-memory state is changed only after the file write succeeds, so a
+    /// transient disk error cannot make the UI disagree with the next launch.
+    pub fn clear_pairing(&self) -> Result<(), ConfigError> {
+        let mut value = self.value.lock();
+        let mut next = value.clone();
+        next.paired_device = None;
+        next.pending_pairing = None;
+        self.save_value(&next)?;
+        *value = next;
+        Ok(())
+    }
+
     fn save(&self) -> Result<(), ConfigError> {
+        self.save_value(&self.value.lock())
+    }
+
+    fn save_value(&self, value: &AppConfig) -> Result<(), ConfigError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&self.path, serde_json::to_vec_pretty(&*self.value.lock())?)?;
+        fs::write(&self.path, serde_json::to_vec_pretty(value)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn clear_pairing_persists_paired_and_pending_state_together() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let store = ConfigStore::open(path.clone()).unwrap();
+        store
+            .set_paired_device(Some(PairedDeviceConfig {
+                device_id: "device_1234567890".into(),
+                device_name: "Test device".into(),
+                scopes: vec!["main".into()],
+            }))
+            .unwrap();
+        store
+            .set_pending_pairing(Some(PendingPairingConfig {
+                device_code: "pending_device_code_1234567890".into(),
+                expires_at: Utc::now() + Duration::minutes(10),
+            }))
+            .unwrap();
+
+        store.clear_pairing().unwrap();
+        let reopened = ConfigStore::open(path).unwrap().snapshot();
+        assert!(reopened.paired_device.is_none());
+        assert!(reopened.pending_pairing.is_none());
     }
 }

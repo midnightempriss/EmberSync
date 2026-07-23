@@ -49,6 +49,22 @@ pub enum ApiError {
     UploadDeferred(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadErrorDisposition {
+    /// The website or network is temporarily unavailable. Keep the segment and
+    /// retry it with bounded backoff.
+    Retry,
+    /// This particular segment needs a person or a newer client/export before
+    /// it can be accepted. Other independent segments may still upload.
+    ActionRequired,
+    /// The device/account authorization itself is unusable, so every queued
+    /// segment must stop until the connection is repaired or reverified.
+    DeviceActionRequired,
+    /// A newer state projection is already committed on the website. Only
+    /// replaceable state may be discarded this way; event history never may.
+    Superseded,
+}
+
 impl ApiError {
     pub fn retry_after(&self) -> Option<u64> {
         match self {
@@ -57,7 +73,7 @@ impl ApiError {
         }
     }
 
-    fn blocks_queue_for_authorization(&self) -> bool {
+    fn upload_disposition(&self, kind: DatasetKind) -> UploadErrorDisposition {
         match self {
             Self::Response {
                 status,
@@ -65,19 +81,95 @@ impl ApiError {
                 code,
                 ..
             } => {
-                matches!(
+                if *status == 408
+                    || *status == 429
+                    || *status >= 500
+                    || matches!(
+                        code.as_deref(),
+                        Some(
+                            "service_unavailable"
+                                | "storage_unavailable"
+                                | "membership_verification_unavailable"
+                                | "sync_session_expired"
+                                | "sync_session_not_found"
+                                | "sync_session_not_restartable"
+                                | "sync_session_restart_conflict"
+                                | "replayed_request"
+                        )
+                    )
+                {
+                    return UploadErrorDisposition::Retry;
+                }
+                if code.as_deref() == Some("sequence_replay") {
+                    return if kind == DatasetKind::State {
+                        UploadErrorDisposition::Superseded
+                    } else {
+                        // Append-only events can contain records the server has
+                        // not seen even when their export sequence is older.
+                        // Retain them as an explicit coverage gap for review.
+                        UploadErrorDisposition::ActionRequired
+                    };
+                }
+                if matches!(
                     code.as_deref(),
                     Some(
                         "ownership_reverification_required"
                             | "account_not_eligible"
                             | "guild_membership_required"
                             | "device_revoked"
+                            | "device_not_found"
                             | "device_not_paired"
+                            | "invalid_signature"
                     )
                 ) || (*status == 403 && message.contains("Sign in with Battle.net again"))
+                {
+                    return UploadErrorDisposition::DeviceActionRequired;
+                }
+                // All other protocol rejections are non-transient. This covers
+                // invalid_*, unsupported schemas/protocols, guild/source/dataset
+                // mismatches, sequence conflicts, and size/integrity failures.
+                // Retrying the identical encrypted segment cannot fix them.
+                UploadErrorDisposition::ActionRequired
             }
-            _ => false,
+            Self::Transport(_) | Self::Queue(_) | Self::UploadDeferred(_) => {
+                UploadErrorDisposition::Retry
+            }
+            Self::InvalidResponse
+            | Self::SegmentTooLarge
+            | Self::PairingExpired
+            | Self::PairingDenied => UploadErrorDisposition::ActionRequired,
         }
+    }
+
+    fn action_required_reason(&self, kind: DatasetKind) -> String {
+        if kind == DatasetKind::Events
+            && matches!(
+                self,
+                Self::Response {
+                    code: Some(code),
+                    ..
+                } if code == "sequence_replay"
+            )
+        {
+            return format!(
+                "event coverage gap requires review; an append-only event range was not discarded: {self}"
+            );
+        }
+        self.to_string()
+    }
+
+    /// A self-revocation is idempotent. If the server no longer recognizes
+    /// this device as active, the desktop client can safely forget its local
+    /// pairing instead of trapping the user in an unrecoverable paired state.
+    pub(crate) fn confirms_device_is_inactive(&self) -> bool {
+        matches!(
+            self,
+            Self::Response {
+                status: 401 | 404,
+                code: Some(code),
+                ..
+            } if matches!(code.as_str(), "device_revoked" | "device_not_found" | "device_not_paired")
+        )
     }
 }
 
@@ -242,6 +334,10 @@ impl ApiClient {
         if !response.status().is_success() {
             return Err(response_error(response).await);
         }
+        Ok(())
+    }
+
+    pub fn forget_signing_key(&self) -> Result<(), ApiError> {
         self.queue.delete_secure(SIGNING_KEY_NAME)?;
         Ok(())
     }
@@ -256,8 +352,11 @@ impl ApiClient {
                 .iter()
                 .any(|scope| scope == upload.envelope.guild_key.as_str())
             {
-                self.queue
-                    .mark_action_required(upload.id, "device scope does not include this guild")?;
+                self.queue.mark_action_required(
+                    upload.id,
+                    &upload.content_hash,
+                    "device scope does not include this guild",
+                )?;
                 first_deferred_error.get_or_insert_with(|| {
                     "This device is not paired for one of the queued guild scopes.".into()
                 });
@@ -265,28 +364,42 @@ impl ApiClient {
             }
             match self.upload_one(&paired.device_id, &upload.envelope).await {
                 Ok(()) => {
-                    self.queue.mark_complete(upload.id)?;
+                    self.queue.mark_complete(upload.id, &upload.content_hash)?;
                     complete += 1;
                 }
-                Err(error) => {
-                    if error.blocks_queue_for_authorization() {
+                Err(error) => match error.upload_disposition(upload.envelope.kind) {
+                    UploadErrorDisposition::Retry => {
+                        first_deferred_error.get_or_insert_with(|| error.to_string());
+                        self.queue.mark_retry(
+                            upload.id,
+                            &upload.content_hash,
+                            upload.attempts,
+                            &error.to_string(),
+                            error.retry_after(),
+                        )?;
+                    }
+                    UploadErrorDisposition::ActionRequired => {
+                        let reason = error.action_required_reason(upload.envelope.kind);
+                        first_deferred_error.get_or_insert_with(|| reason.clone());
+                        self.queue.mark_action_required(
+                            upload.id,
+                            &upload.content_hash,
+                            &reason,
+                        )?;
+                    }
+                    UploadErrorDisposition::DeviceActionRequired => {
                         self.queue.mark_authorization_required(&error.to_string())?;
                         return Err(error);
                     }
-                    first_deferred_error.get_or_insert_with(|| error.to_string());
-                    self.queue.mark_retry(
-                        upload.id,
-                        upload.attempts,
-                        &error.to_string(),
-                        error.retry_after(),
-                    )?;
-                }
+                    UploadErrorDisposition::Superseded => {
+                        self.queue
+                            .mark_superseded(upload.id, &upload.content_hash)?;
+                    }
+                },
             }
         }
-        if complete == 0 {
-            if let Some(error) = first_deferred_error {
-                return Err(ApiError::UploadDeferred(error));
-            }
+        if let Some(error) = first_deferred_error {
+            return Err(ApiError::UploadDeferred(error));
         }
         Ok(complete)
     }
@@ -336,8 +449,10 @@ impl ApiClient {
             .await?;
         let start: SyncStartResponse = parse_response(response).await?;
         if !valid_token(&start.session_id)
-            || start.max_compressed_chunk_bytes != MAX_COMPRESSED_CHUNK
-            || start.max_expanded_chunk_bytes != MAX_EXPANDED_CHUNK
+            || !server_chunk_limits_support_client(
+                start.max_compressed_chunk_bytes,
+                start.max_expanded_chunk_bytes,
+            )
             || start.remaining_compressed_session_bytes < compressed.len()
         {
             return Err(ApiError::InvalidResponse);
@@ -448,17 +563,7 @@ async fn response_error(response: reqwest::Response) -> ApiError {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok());
     let value = response.json::<Value>().await.unwrap_or(Value::Null);
-    let code = value
-        .get("error")
-        .and_then(Value::as_str)
-        .filter(|value| {
-            !value.is_empty()
-                && value.len() <= 100
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-        })
-        .map(str::to_owned);
+    let code = response_code(&value);
     let message = value
         .get("message")
         .or_else(|| value.get("error"))
@@ -473,6 +578,25 @@ async fn response_error(response: reqwest::Response) -> ApiError {
         code,
         retry_after,
     }
+}
+fn response_code(value: &Value) -> Option<String> {
+    value
+        .get("code")
+        // Protocol 1.0 responses use `code`. Keep the older machine-valued
+        // `error` shape as a compatibility fallback.
+        .or_else(|| value.get("error"))
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 100
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+        .map(str::to_owned)
+}
+fn server_chunk_limits_support_client(max_compressed: usize, max_expanded: usize) -> bool {
+    max_compressed >= MAX_COMPRESSED_CHUNK && max_expanded >= MAX_EXPANDED_CHUNK
 }
 fn valid_token(value: &str) -> bool {
     (16..=128).contains(&value.len())
@@ -506,6 +630,7 @@ fn device_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     #[test]
     fn token_validation_rejects_path_injection() {
         assert!(valid_token("device_1234567890"));
@@ -533,6 +658,57 @@ mod tests {
     }
 
     #[test]
+    fn self_revoke_uses_the_exact_signed_device_route_and_body() {
+        let directory = tempfile::tempdir().unwrap();
+        let queue = QueueStore::open(&directory.path().join("queue.sqlite3")).unwrap();
+        queue
+            .unlock_with_passphrase("test-only-passphrase")
+            .unwrap();
+        let client = ApiClient::new(queue.clone()).unwrap();
+        let device_id = "device_1234567890";
+        let path = format!("/api/ember-sync/v1/devices/{device_id}/revoke");
+        let body = canonical::canonical_json(&json!({"protocolVersion":"1.0"}));
+        let request = client
+            .signed_request(Method::POST, &path, device_id, body.clone())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(request.method(), Method::POST);
+        assert_eq!(request.url().as_str(), format!("{WEBSITE_URL}{path}"));
+        assert_eq!(
+            request.body().and_then(reqwest::Body::as_bytes),
+            Some(body.as_slice())
+        );
+        assert_eq!(request.headers()["x-embersync-device-id"], device_id);
+
+        let timestamp = request.headers()["x-embersync-timestamp"].to_str().unwrap();
+        let nonce = request.headers()["x-embersync-nonce"].to_str().unwrap();
+        let body_hash = request.headers()["x-embersync-content-sha256"]
+            .to_str()
+            .unwrap();
+        assert_eq!(body_hash, hex::encode(Sha256::digest(&body)));
+        let signature = Signature::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(request.headers()["x-embersync-signature"].to_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let key_bytes: [u8; 32] = queue
+            .load_secure(SIGNING_KEY_NAME)
+            .unwrap()
+            .unwrap()
+            .as_slice()
+            .try_into()
+            .unwrap();
+        let verifying_key = VerifyingKey::from(&SigningKey::from_bytes(&key_bytes));
+        let message = format!("EMBERSYNC-SIGN-V1\nPOST\n{path}\n{timestamp}\n{nonce}\n{body_hash}");
+        verifying_key
+            .verify(message.as_bytes(), &signature)
+            .unwrap();
+    }
+
+    #[test]
     fn fresh_battlenet_proof_failure_blocks_automatic_queue_retries() {
         let error = ApiError::Response {
             status: 403,
@@ -541,7 +717,10 @@ mod tests {
             code: Some("ownership_reverification_required".into()),
             retry_after: None,
         };
-        assert!(error.blocks_queue_for_authorization());
+        assert_eq!(
+            error.upload_disposition(DatasetKind::State),
+            UploadErrorDisposition::DeviceActionRequired
+        );
 
         let provider_error = ApiError::Response {
             status: 503,
@@ -549,6 +728,236 @@ mod tests {
             code: Some("membership_verification_unavailable".into()),
             retry_after: Some(60),
         };
-        assert!(!provider_error.blocks_queue_for_authorization());
+        assert_eq!(
+            provider_error.upload_disposition(DatasetKind::State),
+            UploadErrorDisposition::Retry
+        );
+    }
+
+    #[test]
+    fn upload_error_dispositions_follow_the_server_contract() {
+        struct Case {
+            status: u16,
+            code: Option<&'static str>,
+            kind: DatasetKind,
+            expected: UploadErrorDisposition,
+        }
+
+        let cases = [
+            Case {
+                status: 408,
+                code: None,
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::Retry,
+            },
+            Case {
+                status: 429,
+                code: Some("rate_limited"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::Retry,
+            },
+            Case {
+                status: 503,
+                code: Some("service_unavailable"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::Retry,
+            },
+            Case {
+                status: 503,
+                code: Some("storage_unavailable"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::Retry,
+            },
+            Case {
+                status: 503,
+                code: Some("membership_verification_unavailable"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::Retry,
+            },
+            Case {
+                status: 409,
+                code: Some("sync_session_expired"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::Retry,
+            },
+            Case {
+                status: 401,
+                code: Some("device_not_paired"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::DeviceActionRequired,
+            },
+            Case {
+                status: 401,
+                code: Some("device_revoked"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::DeviceActionRequired,
+            },
+            Case {
+                status: 401,
+                code: Some("invalid_signature"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::DeviceActionRequired,
+            },
+            Case {
+                status: 403,
+                code: Some("account_not_eligible"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::DeviceActionRequired,
+            },
+            Case {
+                status: 403,
+                code: Some("guild_membership_required"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::DeviceActionRequired,
+            },
+            Case {
+                status: 401,
+                code: Some("stale_request"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+            Case {
+                status: 400,
+                code: Some("unsupported_schema"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+            Case {
+                status: 403,
+                code: Some("guild_identity_denied"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+            Case {
+                status: 403,
+                code: Some("source_character_not_authorized"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+            Case {
+                status: 400,
+                code: Some("dataset_scope_mismatch"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+            Case {
+                status: 400,
+                code: Some("invalid_chunk_envelope"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+            Case {
+                status: 409,
+                code: Some("sequence_conflict"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+            Case {
+                status: 413,
+                code: Some("sync_too_large"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+            Case {
+                status: 409,
+                code: Some("sequence_replay"),
+                kind: DatasetKind::State,
+                expected: UploadErrorDisposition::Superseded,
+            },
+            Case {
+                status: 409,
+                code: Some("sequence_replay"),
+                kind: DatasetKind::Events,
+                expected: UploadErrorDisposition::ActionRequired,
+            },
+        ];
+
+        for case in cases {
+            let error = ApiError::Response {
+                status: case.status,
+                message: "server response".into(),
+                code: case.code.map(str::to_owned),
+                retry_after: None,
+            };
+            assert_eq!(
+                error.upload_disposition(case.kind),
+                case.expected,
+                "unexpected disposition for status {} code {:?} kind {:?}",
+                case.status,
+                case.code,
+                case.kind,
+            );
+        }
+
+        assert_eq!(
+            ApiError::SegmentTooLarge.upload_disposition(DatasetKind::State),
+            UploadErrorDisposition::ActionRequired
+        );
+    }
+
+    #[test]
+    fn replayed_events_are_identified_as_a_coverage_gap() {
+        let error = ApiError::Response {
+            status: 409,
+            message: "The export sequence was already superseded.".into(),
+            code: Some("sequence_replay".into()),
+            retry_after: None,
+        };
+        let reason = error.action_required_reason(DatasetKind::Events);
+        assert!(reason.contains("event coverage gap requires review"));
+        assert!(reason.contains("was not discarded"));
+        assert!(!error
+            .action_required_reason(DatasetKind::State)
+            .contains("coverage gap"));
+    }
+
+    #[test]
+    fn server_chunk_limits_may_grow_but_may_not_shrink_below_client_requirements() {
+        assert!(server_chunk_limits_support_client(
+            MAX_COMPRESSED_CHUNK,
+            MAX_EXPANDED_CHUNK
+        ));
+        assert!(server_chunk_limits_support_client(
+            MAX_COMPRESSED_CHUNK * 2,
+            MAX_EXPANDED_CHUNK * 2
+        ));
+        assert!(!server_chunk_limits_support_client(
+            MAX_COMPRESSED_CHUNK - 1,
+            MAX_EXPANDED_CHUNK
+        ));
+        assert!(!server_chunk_limits_support_client(
+            MAX_COMPRESSED_CHUNK,
+            MAX_EXPANDED_CHUNK - 1
+        ));
+    }
+
+    #[test]
+    fn already_revoked_device_allows_idempotent_local_disconnect() {
+        for code in ["device_revoked", "device_not_found", "device_not_paired"] {
+            let error = ApiError::Response {
+                status: if code == "device_not_found" { 404 } else { 401 },
+                message: "This EmberSync device is not authorized.".into(),
+                code: Some(code.into()),
+                retry_after: None,
+            };
+            assert!(error.confirms_device_is_inactive());
+        }
+
+        let invalid_signature = ApiError::Response {
+            status: 401,
+            message: "The EmberSync signature is invalid.".into(),
+            code: Some("invalid_signature".into()),
+            retry_after: None,
+        };
+        assert!(!invalid_signature.confirms_device_is_inactive());
+    }
+
+    #[test]
+    fn response_machine_code_comes_from_the_code_field() {
+        let value = json!({
+            "error": "This EmberSync device is not authorized.",
+            "code": "device_revoked"
+        });
+        assert_eq!(response_code(&value).as_deref(), Some("device_revoked"));
     }
 }

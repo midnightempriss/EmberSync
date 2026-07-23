@@ -155,6 +155,8 @@ td strong { color: var(--text); }
 .toggle-row small, .paired-device small { color: var(--text-muted); font-size: 11px; }
 .toggle-row input { width: 38px; height: 20px; accent-color: var(--guild-orange); }
 .paired-device > svg { color: var(--green); }
+.settings-section > .connection-message { margin: 14px 0 0; color: var(--green); font-size: 12px; }
+.settings-section > .connection-message.error { color: #ff9fa5; }
 .pairing-code { margin-top: 18px; padding: 17px; border: 1px solid #2b5870; border-radius: 8px; background: #102430; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px 16px; }
 .pairing-code span, .pairing-code small { color: var(--text-muted); font-size: 11px; }
 .pairing-code strong { grid-row: span 2; font: 800 23px/1 ui-monospace, monospace; letter-spacing: .13em; color: var(--blizzard-blue); }

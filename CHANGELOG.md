@@ -3,6 +3,21 @@
 All notable EmberSync changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 0.1.2 - 2026-07-22
+
+### Fixed
+
+- Made website revocation idempotent and reconciled devices that had already
+  been revoked on the site, while retaining signature verification.
+- Displayed pairing and revocation failures in Settings instead of silently
+  swallowing them, and corrected server machine-error parsing.
+- Protected coalesced queue rows from stale in-flight upload results and routed
+  every upload entry point through one bounded queue-draining worker.
+- Reduced Blizzard verification amplification by keeping the sync-start
+  authorization valid through its atomic commit.
+- Matched RFC 8785 canonical JSON across Rust and JavaScript so extreme numeric
+  values and Unicode object keys cannot produce false integrity failures.
+
 ## 0.1.1 - 2026-07-22
 
 ### Added

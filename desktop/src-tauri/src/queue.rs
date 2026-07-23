@@ -48,6 +48,7 @@ pub enum QueueError {
 #[derive(Debug, Clone)]
 pub struct QueuedUpload {
     pub id: i64,
+    pub content_hash: String,
     pub envelope: UploadEnvelope,
     pub attempts: u32,
 }
@@ -229,47 +230,79 @@ impl QueueStore {
         let connection = self.connection.lock();
         let now = chrono::Utc::now().timestamp();
         let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
-        let mut statement = connection.prepare("SELECT id,nonce,ciphertext,attempts FROM upload_queue WHERE (status='pending' OR (status='failed' AND (last_error IS NULL OR last_error NOT LIKE ?3))) AND next_attempt_at <= ?1 ORDER BY id LIMIT ?2")?;
+        let mut statement = connection.prepare("SELECT id,content_hash,nonce,ciphertext,attempts FROM upload_queue WHERE (status='pending' OR (status='failed' AND (last_error IS NULL OR last_error NOT LIKE ?3))) AND next_attempt_at <= ?1 ORDER BY id LIMIT ?2")?;
         let rows =
             statement.query_map(params![now, limit as i64, authorization_pattern], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, u32>(3)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, u32>(4)?,
                 ))
             })?;
         let mut uploads = Vec::new();
         for row in rows {
-            let (id, nonce, ciphertext, attempts) = row?;
+            let (id, content_hash, nonce, ciphertext, attempts) = row?;
             let mut combined = nonce;
             combined.extend_from_slice(&ciphertext);
             let plaintext = decrypt_bytes(key, &combined)?;
             uploads.push(QueuedUpload {
                 id,
+                content_hash,
                 envelope: serde_json::from_slice(&plaintext)?,
                 attempts,
             });
         }
         for upload in &uploads {
             connection.execute(
-                "UPDATE upload_queue SET status='uploading',updated_at=?2 WHERE id=?1",
-                params![upload.id, now],
+                "UPDATE upload_queue SET status='uploading',updated_at=?3 WHERE id=?1 AND content_hash=?2 AND (status='pending' OR status='failed')",
+                params![upload.id, upload.content_hash, now],
             )?;
         }
         Ok(uploads)
     }
 
-    pub fn mark_complete(&self, id: i64) -> Result<(), QueueError> {
+    /// Reports whether another batch can be claimed immediately. This is kept
+    /// separate from the successful-upload count so superseded state and
+    /// action-required segments cannot make a queue drain stop early.
+    pub fn has_ready_now(&self) -> Result<bool, QueueError> {
+        let now = chrono::Utc::now().timestamp();
+        let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
         self.connection
             .lock()
-            .execute("DELETE FROM upload_queue WHERE id=?1", [id])?;
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM upload_queue WHERE (status='pending' OR (status='failed' AND (last_error IS NULL OR last_error NOT LIKE ?2))) AND next_attempt_at <= ?1)",
+                params![now, authorization_pattern],
+                |row| row.get(0),
+            )
+            .map_err(QueueError::from)
+    }
+
+    pub fn mark_complete(&self, id: i64, content_hash: &str) -> Result<(), QueueError> {
+        self.connection.lock().execute(
+            "DELETE FROM upload_queue WHERE id=?1 AND content_hash=?2 AND status='uploading'",
+            params![id, content_hash],
+        )?;
+        Ok(())
+    }
+
+    /// A newer replaceable state is already committed by the server. This is
+    /// intentionally uses the same claimed-hash guard as a successful upload,
+    /// plus a database-level state-kind guard so event history cannot be
+    /// discarded accidentally or reported as a newly uploaded segment.
+    pub fn mark_superseded(&self, id: i64, content_hash: &str) -> Result<(), QueueError> {
+        self.connection.lock().execute(
+            "DELETE FROM upload_queue WHERE id=?1 AND content_hash=?2 AND status='uploading' AND kind='state'",
+            params![id, content_hash],
+        )?;
         Ok(())
     }
 
     pub fn mark_retry(
         &self,
         id: i64,
+        content_hash: &str,
         attempts: u32,
         error: &str,
         retry_after_seconds: Option<u64>,
@@ -280,15 +313,20 @@ impl QueueStore {
             .unwrap_or_else(|| 5_u64.saturating_mul(2_u64.pow(exponent)) + jitter)
             .min(3600);
         let now = chrono::Utc::now().timestamp();
-        self.connection.lock().execute("UPDATE upload_queue SET status='failed',attempts=attempts+1,next_attempt_at=?2,last_error=?3,updated_at=?4 WHERE id=?1", params![id, now + delay as i64, truncate_error(error), now])?;
+        self.connection.lock().execute("UPDATE upload_queue SET status='failed',attempts=attempts+1,next_attempt_at=?3,last_error=?4,updated_at=?5 WHERE id=?1 AND content_hash=?2 AND status='uploading'", params![id, content_hash, now + delay as i64, truncate_error(error), now])?;
         Ok(())
     }
 
-    pub fn mark_action_required(&self, id: i64, error: &str) -> Result<(), QueueError> {
+    pub fn mark_action_required(
+        &self,
+        id: i64,
+        content_hash: &str,
+        error: &str,
+    ) -> Result<(), QueueError> {
         let now = chrono::Utc::now().timestamp();
         self.connection.lock().execute(
-            "UPDATE upload_queue SET status='failed',attempts=attempts+1,next_attempt_at=?2,last_error=?3,updated_at=?4 WHERE id=?1",
-            params![id, NEVER_RETRY_AT, format_authorization_error(error), now],
+            "UPDATE upload_queue SET status='failed',attempts=attempts+1,next_attempt_at=?3,last_error=?4,updated_at=?5 WHERE id=?1 AND content_hash=?2 AND status='uploading'",
+            params![id, content_hash, NEVER_RETRY_AT, format_authorization_error(error), now],
         )?;
         Ok(())
     }
@@ -554,6 +592,147 @@ mod tests {
             .query_row("SELECT ciphertext FROM upload_queue", [], |row| row.get(0))
             .unwrap();
         assert!(!String::from_utf8_lossy(&ciphertext).contains("new"));
+    }
+
+    #[test]
+    fn in_flight_state_result_cannot_mutate_a_newer_coalesced_payload() {
+        fn assert_newer_survives(
+            finish: impl FnOnce(&QueueStore, &QueuedUpload) -> Result<(), QueueError>,
+        ) {
+            let store = store();
+            assert!(store
+                .enqueue(&envelope(1, "old", DatasetKind::State))
+                .unwrap());
+            let claimed = store.next_ready(1).unwrap().remove(0);
+            assert_eq!(claimed.envelope.payload["value"], "old");
+
+            assert!(store
+                .enqueue(&envelope(2, "new", DatasetKind::State))
+                .unwrap());
+            finish(&store, &claimed).unwrap();
+
+            let next = store.next_ready(1).unwrap();
+            assert_eq!(next.len(), 1);
+            assert_eq!(next[0].envelope.payload["value"], "new");
+            assert_ne!(next[0].content_hash, claimed.content_hash);
+        }
+
+        assert_newer_survives(|store, claimed| {
+            store.mark_complete(claimed.id, &claimed.content_hash)
+        });
+        assert_newer_survives(|store, claimed| {
+            store.mark_retry(
+                claimed.id,
+                &claimed.content_hash,
+                claimed.attempts,
+                "temporary failure",
+                None,
+            )
+        });
+        assert_newer_survives(|store, claimed| {
+            store.mark_action_required(claimed.id, &claimed.content_hash, "scope approval required")
+        });
+    }
+
+    #[test]
+    fn retry_action_required_and_superseded_have_distinct_queue_transitions() {
+        let store = store();
+        let mut retry = envelope(1, "retry", DatasetKind::State);
+        retry.subject_id = "retry-state".into();
+        let mut coverage_gap = envelope(2, "event", DatasetKind::Events);
+        coverage_gap.subject_id = "event-range-2".into();
+        let mut superseded = envelope(3, "old-state", DatasetKind::State);
+        superseded.subject_id = "superseded-state".into();
+        assert!(store.enqueue(&retry).unwrap());
+        assert!(store.enqueue(&coverage_gap).unwrap());
+        assert!(store.enqueue(&superseded).unwrap());
+        assert!(store.has_ready_now().unwrap());
+
+        let claimed = store.next_ready(10).unwrap();
+        assert_eq!(claimed.len(), 3);
+        assert!(!store.has_ready_now().unwrap());
+        let retry = claimed
+            .iter()
+            .find(|upload| upload.envelope.subject_id == "retry-state")
+            .unwrap();
+        let coverage_gap = claimed
+            .iter()
+            .find(|upload| upload.envelope.subject_id == "event-range-2")
+            .unwrap();
+        let superseded = claimed
+            .iter()
+            .find(|upload| upload.envelope.subject_id == "superseded-state")
+            .unwrap();
+
+        store
+            .mark_retry(
+                retry.id,
+                &retry.content_hash,
+                retry.attempts,
+                "website storage is temporarily unavailable",
+                Some(60),
+            )
+            .unwrap();
+        store
+            .mark_action_required(
+                coverage_gap.id,
+                &coverage_gap.content_hash,
+                "event coverage gap requires review; append-only history was retained",
+            )
+            .unwrap();
+        store
+            .mark_superseded(superseded.id, &superseded.content_hash)
+            .unwrap();
+
+        let summary = store.summary().unwrap();
+        assert_eq!(summary.pending, 0);
+        assert_eq!(summary.uploading, 0);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.action_required, 1);
+        assert!(!store.has_ready_now().unwrap());
+        let connection = store.connection.lock();
+        let (retry_status, retry_error, retry_at): (String, String, i64) = connection
+            .query_row(
+                "SELECT status,last_error,next_attempt_at FROM upload_queue WHERE id=?1",
+                [retry.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(retry_status, "failed");
+        assert!(retry_error.contains("temporarily unavailable"));
+        assert!(retry_at > chrono::Utc::now().timestamp());
+        let gap_error: String = connection
+            .query_row(
+                "SELECT last_error FROM upload_queue WHERE id=?1",
+                [coverage_gap.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(gap_error.starts_with(AUTHORIZATION_REQUIRED_PREFIX));
+        assert!(gap_error.contains("event coverage gap requires review"));
+        let superseded_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM upload_queue WHERE id=?1",
+                [superseded.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(superseded_count, 0);
+    }
+
+    #[test]
+    fn superseded_transition_refuses_to_delete_event_history() {
+        let store = store();
+        let mut event = envelope(1, "event", DatasetKind::Events);
+        event.subject_id = "event-range-1".into();
+        assert!(store.enqueue(&event).unwrap());
+        let claimed = store.next_ready(1).unwrap().remove(0);
+
+        store
+            .mark_superseded(claimed.id, &claimed.content_hash)
+            .unwrap();
+
+        assert_eq!(store.summary().unwrap().uploading, 1);
     }
 
     #[test]
