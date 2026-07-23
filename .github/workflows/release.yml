@@ -96,7 +96,7 @@ jobs:
             args: --bundles appimage,deb,rpm
             rust-targets: ""
           - platform: macos-14
-            args: --target universal-apple-darwin --bundles dmg
+            args: --target universal-apple-darwin --bundles app,dmg
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
     runs-on: ${{ matrix.platform }}
     steps:
