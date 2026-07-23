@@ -1,5 +1,6 @@
 use crate::{
     api_client::ApiClient,
+    api_client::ApiError,
     config::ConfigStore,
     discovery,
     ingest::{IngestError, Ingestor},
@@ -11,13 +12,17 @@ use chrono::Utc;
 use parking_lot::{Mutex, RwLock};
 use std::{
     collections::{BTreeMap, VecDeque},
+    future::Future,
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter};
+use tokio::time::{Instant, MissedTickBehavior};
 use uuid::Uuid;
 
 const MAX_DRAIN_BATCHES: usize = 32;
+const AUTO_SYNC_INTERVAL: Duration = Duration::from_secs(AUTO_SYNC_INTERVAL_MINUTES * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DrainStep {
@@ -36,12 +41,30 @@ fn next_drain_step(has_ready_work: bool, batches_completed: usize) -> DrainStep 
     }
 }
 
+fn automatic_sync_eligible(vault_unlocked: bool, paired: bool) -> bool {
+    vault_unlocked && paired
+}
+
+async fn run_periodic<F, Fut>(interval: Duration, mut on_tick: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let mut ticker = tokio::time::interval_at(Instant::now() + interval, interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        on_tick().await;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncTrigger {
     Manual,
     Tray,
     Watcher,
     Startup,
+    Scheduled,
     Continuation,
 }
 
@@ -56,7 +79,7 @@ impl SyncTrigger {
             Self::Manual | Self::Tray => {
                 format!("Completed {count} encrypted upload {noun}.")
             }
-            Self::Watcher | Self::Startup | Self::Continuation => {
+            Self::Watcher | Self::Startup | Self::Scheduled | Self::Continuation => {
                 format!("Automatically uploaded {count} encrypted {noun}.")
             }
         }
@@ -65,7 +88,7 @@ impl SyncTrigger {
     fn failure_message(self, error: &str) -> String {
         match self {
             Self::Manual | Self::Tray => format!("Website sync failed safely: {error}"),
-            Self::Watcher | Self::Startup | Self::Continuation => {
+            Self::Watcher | Self::Startup | Self::Scheduled | Self::Continuation => {
                 format!("Automatic sync deferred safely: {error}")
             }
         }
@@ -173,8 +196,9 @@ impl AppState {
         self.0
             .watcher
             .start(roots, move || {
-                let _ = state.scan(&callback_app);
-                state.schedule_sync(callback_app.clone(), SyncTrigger::Watcher);
+                if state.scan(&callback_app).is_ok() {
+                    state.schedule_automatic_sync(callback_app.clone(), SyncTrigger::Watcher);
+                }
             })
             .map_err(|error| error.to_string())?;
         self.0.status.write().watcher_running = true;
@@ -309,10 +333,148 @@ impl AppState {
     pub fn update_connection(&self, connection: ConnectionState) {
         self.0.status.write().connection = connection;
     }
+
+    pub fn start_auto_sync(&self, app: AppHandle) {
+        self.start_auto_sync_with_interval(app, AUTO_SYNC_INTERVAL);
+    }
+
+    fn start_auto_sync_with_interval(&self, app: AppHandle, interval: Duration) {
+        self.set_next_auto_sync(&app, interval);
+        let state = self.clone();
+        tauri::async_runtime::spawn(async move {
+            run_periodic(interval, move || {
+                let state = state.clone();
+                let app = app.clone();
+                async move {
+                    // Publish the following due time before doing any file or
+                    // network work so the UI never shows an elapsed deadline.
+                    state.set_next_auto_sync(&app, interval);
+                    state.run_scheduled_sync_cycle(&app).await;
+                }
+            })
+            .await;
+        });
+    }
+
+    async fn run_scheduled_sync_cycle(&self, app: &AppHandle) {
+        let scan_state = self.clone();
+        let scan_app = app.clone();
+        match tauri::async_runtime::spawn_blocking(move || scan_state.scan(&scan_app)).await {
+            Ok(Ok(_)) => {
+                self.schedule_automatic_sync(app.clone(), SyncTrigger::Scheduled);
+            }
+            Ok(Err(error)) => {
+                self.diagnostic(
+                    DiagnosticLevel::Warning,
+                    format!("Scheduled SavedVariables scan could not complete safely: {error}"),
+                );
+                self.emit(app);
+            }
+            Err(error) => {
+                self.diagnostic(
+                    DiagnosticLevel::Warning,
+                    format!("Scheduled SavedVariables scan could not start safely: {error}"),
+                );
+                self.emit(app);
+            }
+        }
+    }
+
+    pub fn schedule_automatic_sync(&self, app: AppHandle, trigger: SyncTrigger) {
+        if automatic_sync_eligible(
+            self.0.queue.is_unlocked(),
+            self.0.config.snapshot().paired_device.is_some(),
+        ) {
+            self.schedule_sync(app, trigger);
+        }
+    }
+
     pub fn schedule_sync(&self, app: AppHandle, trigger: SyncTrigger) {
         let state = self.clone();
         tauri::async_runtime::spawn(async move {
             let _ = state.sync_queue(&app, trigger).await;
+        });
+    }
+
+    pub fn schedule_rescan_and_sync(&self, app: AppHandle, trigger: SyncTrigger) {
+        let state = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = state.rescan_and_sync(&app, trigger).await;
+        });
+    }
+
+    pub async fn rescan_and_sync(
+        &self,
+        app: &AppHandle,
+        trigger: SyncTrigger,
+    ) -> Result<DesktopStatus, String> {
+        let scan_state = self.clone();
+        let scan_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || scan_state.scan(&scan_app))
+            .await
+            .map_err(|error| error.to_string())??;
+        self.sync_queue(app, trigger).await
+    }
+
+    pub fn start_pairing_poll(&self, app: AppHandle, interval_seconds: u64) {
+        let state = self.clone();
+        let interval = Duration::from_secs(interval_seconds.clamp(1, 60));
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                let snapshot = state.0.config.snapshot();
+                if snapshot.paired_device.is_some() {
+                    break;
+                }
+                let Some(pending) = snapshot.pending_pairing else {
+                    break;
+                };
+                if pending.expires_at <= Utc::now() {
+                    let _ = state.0.config.set_pending_pairing(None);
+                    state.diagnostic(
+                        DiagnosticLevel::Warning,
+                        "The website pairing request expired before approval.".into(),
+                    );
+                    state.emit(&app);
+                    break;
+                }
+                match state.0.api.poll_pairing(&pending).await {
+                    Ok(Some(paired)) => {
+                        if let Err(error) = state.0.config.set_paired_device(Some(paired)) {
+                            state.diagnostic(
+                                DiagnosticLevel::Error,
+                                format!("Approved pairing could not be saved safely: {error}"),
+                            );
+                            state.emit(&app);
+                            break;
+                        }
+                        let _ = state.0.config.set_pending_pairing(None);
+                        let _ = state.0.queue.release_authorization_required();
+                        state.refresh_pairing_status();
+                        state.diagnostic(
+                            DiagnosticLevel::Info,
+                            "This device was paired automatically after website approval.".into(),
+                        );
+                        state.emit(&app);
+                        state.schedule_automatic_sync(app.clone(), SyncTrigger::Scheduled);
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(ApiError::PairingExpired | ApiError::PairingDenied) => {
+                        let _ = state.0.config.set_pending_pairing(None);
+                        state.diagnostic(
+                            DiagnosticLevel::Warning,
+                            "The website pairing request expired or was denied.".into(),
+                        );
+                        state.emit(&app);
+                        break;
+                    }
+                    Err(_) => {
+                        // A transient provider or network failure is retried at
+                        // the server-supplied cadence until the request expires.
+                    }
+                }
+            }
         });
     }
 
@@ -431,6 +593,12 @@ impl AppState {
     pub fn set_last_upload_now(&self) {
         self.0.status.write().last_upload_at = Some(Utc::now());
     }
+    fn set_next_auto_sync(&self, app: &AppHandle, interval: Duration) {
+        let interval = chrono::Duration::from_std(interval)
+            .unwrap_or_else(|_| chrono::Duration::minutes(AUTO_SYNC_INTERVAL_MINUTES as i64));
+        self.0.status.write().next_auto_sync_at = Some(Utc::now() + interval);
+        self.emit(app);
+    }
     pub fn emit(&self, app: &AppHandle) {
         let _ = app.emit("embersync://status", self.status());
     }
@@ -460,6 +628,7 @@ impl PartialOrd for GuildKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn single_flight_rejects_overlap_and_releases_on_drop() {
@@ -480,5 +649,43 @@ mod tests {
             DrainStep::ContinueLater
         );
         assert_eq!(next_drain_step(false, 1), DrainStep::Done);
+    }
+
+    #[test]
+    fn automatic_sync_requires_both_pairing_and_an_unlocked_vault() {
+        assert!(automatic_sync_eligible(true, true));
+        assert!(!automatic_sync_eligible(false, true));
+        assert!(!automatic_sync_eligible(true, false));
+        assert!(!automatic_sync_eligible(false, false));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn periodic_runner_waits_for_each_injected_interval() {
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let task_ticks = ticks.clone();
+        let task = tokio::spawn(async move {
+            run_periodic(Duration::from_secs(15), move || {
+                task_ticks.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(())
+            })
+            .await;
+        });
+
+        tokio::task::yield_now().await;
+        assert_eq!(ticks.load(Ordering::SeqCst), 0);
+
+        tokio::time::advance(Duration::from_secs(14)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(ticks.load(Ordering::SeqCst), 0);
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(ticks.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_secs(15)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(ticks.load(Ordering::SeqCst), 2);
+
+        task.abort();
     }
 }

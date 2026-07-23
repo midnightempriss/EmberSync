@@ -26,17 +26,32 @@ WoW APIs -> in-memory staging -> EmberSyncDB -> stable file read
 
 WoW serializes SavedVariables only on reload, logout, disconnect, or exit.
 Consequently the UI records separate capture, persistence, and upload times.
+The desktop reacts immediately to stable file changes and also runs a guarded
+15-minute scan/upload cycle. The periodic cycle skips unpaired or locked
+clients, makes no website request for an empty queue, and never overlaps the
+single queue-draining worker. Successfully committed content hashes are
+retained locally as acknowledgements so an unchanged state envelope or
+retained event cannot be queued again on the next scan.
 
 ## Dataset semantics
 
-Every segment has a stable dataset name, guild scope, source character,
-sequence, capture time, payload hash, and coverage status. Coverage is one of
+Every segment has a bounded dataset name, guild scope, source character,
+sequence, capture time, payload hash, envelope hash, and coverage status.
+Registered names and their allowed scopes come from one catalog asserted by
+the addon, protocol, desktop, and website test suites. Coverage is one of
 `complete`, `partial`, `forbidden`, `interaction_required`, `unavailable`, or
 `unsupported`.
 
 Omission is never a deletion unless the source completed a full enumeration.
-State segments coalesce to the latest sequence; append-only ranges retain their
-event identities and deduplicate at the server.
+State segments coalesce by dataset, scope, and subject while rejecting stale
+sequences. A newer coverage-only observation may retain the same payload and
+sequence but receives its own envelope hash. Append-only events upload as
+bounded contiguous ranges and retain their identities for server deduplication.
+
+Version 0.1.4 advances the local state-receipt epoch once. Existing state
+receipts are revalidated and current state is uploaded one time so new server
+projections can be backfilled; event receipts remain idempotent and unchanged
+state does not enter a re-upload loop.
 
 ## Storage
 

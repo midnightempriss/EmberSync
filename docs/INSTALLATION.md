@@ -30,6 +30,24 @@ device from the Members settings page at <https://rainingembers.org>. Startup
 launch is opt-in. When enabled, EmberSync launches with `--background` into the
 system tray and does not keep a terminal window open.
 
+On Windows, EmberSync reads Battle.net's installation registry before falling
+back to the standard folders, so Retail installations on custom drives are
+normally discovered without configuration. A manually selected WTF folder
+remains supported.
+
+While paired and unlocked, the desktop watches selected SavedVariables files
+and automatically scans for queued changes every 15 minutes. It uploads
+eligible changes without requiring the **Sync now** button and makes no upload
+request when the queue is empty. World of Warcraft persists addon
+SavedVariables on `/reload`, logout, disconnect, or exit; opening a game window
+can improve collection, but the new data is not visible to the desktop until
+the game writes that file.
+
+Passive collectors do not open visible interfaces or perform protected
+actions. APIs Blizzard exposes only while a bank, mailbox, Auction House,
+profession, or housing context is naturally open are marked
+`interaction_required`, and their same-character last-good data is retained.
+
 ## Checksums
 
 Compare downloaded artifacts against `SHA256SUMS.txt` from the same release.

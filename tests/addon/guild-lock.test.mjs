@@ -102,6 +102,8 @@ test("guild lock accepts only the two canonical guild identities", async () => {
 
 test("denied or verifying state cannot initialize SavedVariables", async () => {
   const L = await execute(`
+    UnitGUID = function() return "Player-1-00000001" end
+    UnitFullName = function() return "Tester", "Dalaran" end
     EmberSync.GuildLock.state = "denied"
     EmberSync.GuildLock.identity = nil
     local db, reason = EmberSync.Database:Ensure()
@@ -130,6 +132,9 @@ test("denied or verifying state cannot initialize SavedVariables", async () => {
     assert(committed == true)
     assert(db.exports.main.guild.key == "main")
     assert(db.exports.main.datasets.guild.guild.name == "Raining Embers")
+    assert(EmberSync.Database:AppendEvent("guild_chat", { message = "permitted guild message" }))
+    assert(db.exports.main.coverage["events.guild_chat"].status == "complete")
+    assert(db.exports.main.coverage["events.guild_chat"].recordCount == 1)
   `);
   assert.ok(L);
 });

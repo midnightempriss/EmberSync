@@ -5,6 +5,26 @@ import type {
 } from "./guilds.js";
 import type { ProtocolVersion, SchemaVersion } from "./version.js";
 
+export {
+  DATASET_NAMES_V1,
+  DATASET_SCOPES_V1,
+  EVENT_DATASET_NAMES_V1,
+  STATE_DATASET_NAMES_V1,
+  datasetAllowsScopeV1,
+  isBoundedRawEventDatasetNameV1,
+  isBoundedRawEventStreamNameV1,
+  isBoundedRawStateDatasetNameV1,
+  isDatasetNameV1,
+  isEventDatasetNameV1,
+  isStateDatasetNameV1,
+} from "./registry.js";
+export type {
+  DatasetNameV1,
+  DatasetScopeNameV1,
+  EventDatasetNameV1,
+  StateDatasetNameV1,
+} from "./registry.js";
+
 export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
@@ -18,38 +38,6 @@ export const COVERAGE_STATUSES = [
 ] as const;
 export type CoverageStatus = (typeof COVERAGE_STATUSES)[number];
 
-export const STATE_DATASET_NAMES_V1 = [
-  "auction_house",
-  "calendar",
-  "character",
-  "guild_chat",
-  "collections",
-  "crafting",
-  "damage_meter",
-  "guild",
-  "guild_bank",
-  "housing",
-  "inventory",
-  "mail_metadata",
-  "mythic_plus",
-  "professions",
-  "progression",
-  "pvp",
-] as const;
-export type StateDatasetNameV1 = (typeof STATE_DATASET_NAMES_V1)[number];
-
-export const EVENT_DATASET_NAMES_V1 = [
-  "events.guild_chat",
-  "events.officer_chat",
-] as const;
-export type EventDatasetNameV1 = (typeof EVENT_DATASET_NAMES_V1)[number];
-
-export const DATASET_NAMES_V1 = [
-  ...STATE_DATASET_NAMES_V1,
-  ...EVENT_DATASET_NAMES_V1,
-] as const;
-export type DatasetNameV1 = StateDatasetNameV1 | EventDatasetNameV1;
-
 export type DatasetKind = "state" | "events";
 export type DatasetScopeV1 =
   | "guild"
@@ -58,6 +46,12 @@ export type DatasetScopeV1 =
   | "house"
   | "neighborhood"
   | "session";
+
+/**
+ * A registered name receives typed projection. Any other syntactically
+ * bounded name is retained encrypted and exposed only as raw/unregistered.
+ */
+export type UploadDatasetNameV1 = string;
 
 export interface CoverageV1 {
   readonly status: CoverageStatus;
@@ -115,7 +109,8 @@ export interface AddonSourceCharacterV1 {
 
 export interface AddonDatasetEnvelopeV1 {
   readonly schemaVersion: SchemaVersion;
-  readonly dataset: StateDatasetNameV1;
+  /** Registered datasets project; bounded future names upload as raw-retained. */
+  readonly dataset: string;
   readonly scope: DatasetScopeV1;
   readonly subjectId: string;
   readonly guildKey: GuildKey;
@@ -152,7 +147,8 @@ export interface SavedVariablesGuildExportV1 {
   readonly installationId: string;
   readonly sequence: number;
   readonly capturedAt: number;
-  readonly persistedAt?: string;
+  /** Unix epoch seconds written by the addon immediately before logout/reload. */
+  readonly persistedAt?: number;
   readonly datasets: Readonly<Record<string, AddonDatasetEnvelopeV1>>;
   readonly events: Readonly<Record<string, readonly AddonEventV1[]>>;
   readonly coverage: Readonly<Record<string, AddonCoverageV1>>;
@@ -161,6 +157,9 @@ export interface SavedVariablesGuildExportV1 {
 /** The complete account-level Lua SavedVariables value: `EmberSyncDB`. */
 export interface EmberSyncSavedVariablesV1 {
   readonly schemaVersion: SchemaVersion;
+  readonly installationId: string;
+  readonly createdAt?: number;
+  readonly updatedAt?: number;
   readonly exports: Partial<Record<GuildKey, SavedVariablesGuildExportV1>>;
 }
 
@@ -172,7 +171,7 @@ export type Sha256Hex = string;
 export interface DatasetEnvelopeV1 {
   readonly schemaVersion: SchemaVersion;
   readonly protocolVersion: ProtocolVersion;
-  readonly dataset: DatasetNameV1;
+  readonly dataset: UploadDatasetNameV1;
   readonly kind: DatasetKind;
   readonly scope: DatasetScopeV1;
   /** Stable identifier inside scope (for example a Player-* GUID or house ID). */
@@ -183,8 +182,12 @@ export interface DatasetEnvelopeV1 {
   readonly installationId: string;
   readonly exportSequence: number;
   readonly capturedAt: string;
+  /** Ordinary SavedVariables persistence time as positive Unix seconds. */
+  readonly persistedAt: number;
   readonly coverage: CoverageV1;
   readonly permissionEvidence?: PermissionEvidenceV1;
+  /** Required for event batches and forbidden for state envelopes. */
+  readonly eventRange?: EventRangeV1;
   /** SHA-256 of canonical JSON for payload alone. */
   readonly payloadHash: Sha256Hex;
   readonly payload: JsonValue;
@@ -249,7 +252,7 @@ export interface EventRangeV1 {
 }
 
 export interface SegmentManifestEntryV1 {
-  readonly dataset: DatasetNameV1;
+  readonly dataset: UploadDatasetNameV1;
   readonly kind: DatasetKind;
   readonly scope: DatasetScopeV1;
   readonly subjectId: string;
@@ -271,6 +274,9 @@ export interface SyncManifestV1 {
   readonly installationId: string;
   readonly exportSequence: number;
   readonly capturedAt: string;
+  readonly persistedAt: number;
+  /** Time this encrypted segment entered the durable desktop queue. */
+  readonly queuedAt: number;
   readonly segments: readonly SegmentManifestEntryV1[];
 }
 

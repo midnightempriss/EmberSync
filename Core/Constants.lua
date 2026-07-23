@@ -17,6 +17,28 @@ local Constants = {
     COLLECTOR_HEARTBEAT_SECONDS = 15 * 60,
     DATABASE_SIZE_CHECK_SEQUENCE_INTERVAL = 50,
     COOPERATIVE_WORK_INTERVAL = 200,
+    INSTALLATION_ID_LENGTH = 16,
+    INSTALLATION_ID_FORMAT_VERSION = 2,
+    HOUSING_DISCOVERY_COOLDOWN_SECONDS = 60,
+    HOUSING_NEIGHBORHOOD_CATALOG_VERSION = 1,
+    WORLD_QUEST_MAP_LIMIT = 64,
+    WORLD_QUESTS_PER_MAP_LIMIT = 200,
+    WORLD_QUEST_MAP_CATALOG_VERSION = 1,
+    -- Retail 12.0.7 Midnight map catalog. Keeping this versioned and explicit
+    -- lets a character collect the current expansion's visible world quests
+    -- even while they are idling in an older continent.
+    WORLD_QUEST_CURRENT_EXPANSION = {
+        key = "midnight",
+        rootMapID = 2537, -- Quel'Thalas
+        mapIDs = {
+            2393, -- Silvermoon City
+            2395, -- Eversong Woods
+            2405, -- Voidstorm
+            2413, -- Harandar
+            2424, -- Isle of Quel'Danas
+            2437, -- Zul'Aman
+        },
+    },
     COVERAGE = {
         COMPLETE = "complete",
         PARTIAL = "partial",
@@ -24,6 +46,36 @@ local Constants = {
         INTERACTION_REQUIRED = "interaction_required",
         UNAVAILABLE = "unavailable",
         UNSUPPORTED = "unsupported",
+    },
+    -- This is the addon-side source of truth for names put into the
+    -- SavedVariables wire format. Protocol, desktop, and site tests mirror this
+    -- registry so contract drift fails a build instead of silently dropping a
+    -- collector.
+    STATE_DATASETS = {
+        auction_house = true,
+        calendar = true,
+        character = true,
+        collections = true,
+        crafting = true,
+        damage_meter = true,
+        guild = true,
+        guild_bank = true,
+        housing = true,
+        inventory = true,
+        mail_metadata = true,
+        mythic_plus = true,
+        professions = true,
+        progression = true,
+        pvp = true,
+        world_quests = true,
+    },
+    EVENT_STREAMS = {
+        ["events.guild_chat"] = true,
+        ["events.officer_chat"] = true,
+        ["events.guild"] = true,
+        ["events.guild_bank"] = true,
+        ["events.guild_presence"] = true,
+        ["events.neighborhood_initiative"] = true,
     },
     GUILDS = {
         main = {

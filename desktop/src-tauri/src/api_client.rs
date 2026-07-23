@@ -4,6 +4,7 @@ use crate::{
     guild::WEBSITE_URL,
     models::{DatasetKind, GuildKey, UploadEnvelope},
     queue::{QueueError, QueueStore},
+    registry,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -12,6 +13,7 @@ use flate2::{write::GzEncoder, Compression};
 use rand::{rngs::OsRng, RngCore};
 use reqwest::{
     header::{CONTENT_ENCODING, CONTENT_TYPE, RETRY_AFTER},
+    redirect::Policy,
     Method,
 };
 use serde::{Deserialize, Serialize};
@@ -217,10 +219,19 @@ pub enum PairingPollResponse {
 #[serde(rename_all = "camelCase")]
 struct SyncStartResponse {
     session_id: String,
+    expires_at: DateTime<Utc>,
     missing_envelope_hashes: Vec<String>,
     max_compressed_chunk_bytes: usize,
     max_expanded_chunk_bytes: usize,
     remaining_compressed_session_bytes: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncCommitResponse {
+    status: String,
+    committed_at: DateTime<Utc>,
+    accepted_sequence: u64,
 }
 
 pub struct ApiClient {
@@ -228,13 +239,162 @@ pub struct ApiClient {
     queue: Arc<QueueStore>,
 }
 
+fn valid_upload_envelope(envelope: &UploadEnvelope) -> bool {
+    if envelope.schema_version != 1
+        || envelope.protocol_version != "1.0"
+        || !registry::is_installation_id(&envelope.installation_id)
+        || !registry::is_player_guid(&envelope.source_character.guid)
+        || envelope.export_sequence == 0
+        || envelope.export_sequence > registry::MAX_SAFE_SEQUENCE
+        || envelope.persisted_at <= 0
+        || canonical::sha256_hex(&envelope.payload) != envelope.payload_hash
+    {
+        return false;
+    }
+
+    match (envelope.kind, envelope.event_range) {
+        (DatasetKind::State, None) => {
+            if !registry::is_bounded_state_name(&envelope.dataset) {
+                return false;
+            }
+            if let Some(expected) = registry::registered_state_scope(&envelope.dataset) {
+                if envelope.scope != expected {
+                    return false;
+                }
+            } else if !registry::is_dataset_scope(&envelope.scope) {
+                return false;
+            }
+            valid_state_subject(envelope)
+        }
+        (DatasetKind::Events, Some(range)) => {
+            if !registry::is_bounded_event_dataset_name(&envelope.dataset)
+                || registry::registered_event_scope(&envelope.dataset)
+                    .map_or(envelope.scope != "guild", |expected| {
+                        envelope.scope != expected
+                    })
+                || range.first_sequence == 0
+                || range.first_sequence > range.last_sequence
+                || range.last_sequence != envelope.export_sequence
+                || envelope.subject_id
+                    != crate::models::event_subject_id(
+                        &envelope.installation_id,
+                        &envelope.source_character.guid,
+                        range.first_sequence,
+                    )
+            {
+                return false;
+            }
+            valid_event_batch_payload(envelope, range)
+        }
+        _ => false,
+    }
+}
+
+fn valid_state_subject(envelope: &UploadEnvelope) -> bool {
+    match envelope.scope.as_str() {
+        "guild" => envelope.subject_id == envelope.guild_key.as_str(),
+        "account" => envelope.subject_id == "account",
+        "character" => envelope.subject_id == envelope.source_character.guid,
+        "house" | "neighborhood" | "session" => {
+            !envelope.subject_id.is_empty() && envelope.subject_id.len() <= 256
+        }
+        _ => false,
+    }
+}
+
+fn valid_event_batch_payload(envelope: &UploadEnvelope, range: crate::models::EventRange) -> bool {
+    const MAX_EVENTS_PER_BATCH: usize = 250;
+    let Some(root) = envelope.payload.as_object() else {
+        return false;
+    };
+    let Some(events) = root.get("events").and_then(Value::as_array) else {
+        return false;
+    };
+    if root.len() != 1 || events.is_empty() || events.len() > MAX_EVENTS_PER_BATCH {
+        return false;
+    }
+    let expected_len = range
+        .last_sequence
+        .checked_sub(range.first_sequence)
+        .and_then(|distance| distance.checked_add(1))
+        .and_then(|length| usize::try_from(length).ok());
+    if expected_len != Some(events.len()) {
+        return false;
+    }
+
+    for (index, event) in events.iter().enumerate() {
+        let Some(event) = event.as_object() else {
+            return false;
+        };
+        if event.len() != 3
+            || !event.contains_key("payload")
+            || event.get("sequence").and_then(Value::as_u64)
+                != range.first_sequence.checked_add(index as u64)
+            || event
+                .get("capturedAt")
+                .and_then(Value::as_i64)
+                .map_or(true, |value| value <= 0)
+        {
+            return false;
+        }
+    }
+    events
+        .last()
+        .and_then(Value::as_object)
+        .and_then(|event| event.get("capturedAt"))
+        .and_then(Value::as_i64)
+        == Some(envelope.captured_at.timestamp())
+}
+
+fn build_sync_manifest(
+    envelope: &UploadEnvelope,
+    queued_at: i64,
+    envelope_hash: &str,
+    compressed_bytes: usize,
+    expanded_bytes: usize,
+) -> Result<Value, ApiError> {
+    if queued_at <= 0 {
+        return Err(ApiError::InvalidResponse);
+    }
+    let mut segment = json!({
+        "dataset": envelope.dataset,
+        "kind": envelope.kind,
+        "scope": envelope.scope,
+        "subjectId": envelope.subject_id,
+        "coverage": envelope.coverage,
+        "payloadHash": envelope.payload_hash,
+        "envelopeHash": envelope_hash,
+        "compressedBytes": compressed_bytes,
+        "expandedBytes": expanded_bytes
+    });
+    if envelope.kind == DatasetKind::Events {
+        let range = envelope.event_range.ok_or(ApiError::InvalidResponse)?;
+        segment
+            .as_object_mut()
+            .expect("segment is an object")
+            .insert(
+                "eventRange".into(),
+                json!({"firstSequence":range.first_sequence,"lastSequence":range.last_sequence}),
+            );
+    }
+    Ok(json!({
+        "schemaVersion": 1,
+        "protocolVersion": "1.0",
+        "guildKey": envelope.guild_key,
+        "guild": envelope.guild,
+        "sourceCharacter": envelope.source_character,
+        "installationId": envelope.installation_id,
+        "exportSequence": envelope.export_sequence,
+        "capturedAt": envelope.captured_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "persistedAt": envelope.persisted_at,
+        "queuedAt": queued_at,
+        "segments": [segment]
+    }))
+}
+
 impl ApiClient {
     pub fn new(queue: Arc<QueueStore>) -> Result<Self, ApiError> {
-        let client = reqwest::Client::builder()
-            .https_only(true)
-            .user_agent(format!("EmberSync/{}", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
+        let client = build_http_client(true)?;
         Ok(Self { client, queue })
     }
 
@@ -362,9 +522,18 @@ impl ApiClient {
                 });
                 continue;
             }
-            match self.upload_one(&paired.device_id, &upload.envelope).await {
-                Ok(()) => {
-                    self.queue.mark_complete(upload.id, &upload.content_hash)?;
+            match self
+                .upload_one(&paired.device_id, &upload.envelope, upload.queued_at)
+                .await
+            {
+                Ok(receipt) => {
+                    self.queue.mark_complete_with_receipt(
+                        upload.id,
+                        &upload.content_hash,
+                        Some(receipt.committed_at.timestamp()),
+                        Some(receipt.accepted_sequence),
+                        &receipt.status,
+                    )?;
                     complete += 1;
                 }
                 Err(error) => match error.upload_disposition(upload.envelope.kind) {
@@ -404,16 +573,14 @@ impl ApiClient {
         Ok(complete)
     }
 
-    async fn upload_one(&self, device_id: &str, envelope: &UploadEnvelope) -> Result<(), ApiError> {
+    async fn upload_one(
+        &self,
+        device_id: &str,
+        envelope: &UploadEnvelope,
+        queued_at: i64,
+    ) -> Result<SyncCommitResponse, ApiError> {
         crate::guild::validate(&envelope.guild).map_err(|_| ApiError::InvalidResponse)?;
-        if envelope.kind == DatasetKind::Events
-            && envelope.subject_id
-                != crate::models::event_subject_id(
-                    &envelope.installation_id,
-                    &envelope.source_character.guid,
-                    envelope.export_sequence,
-                )
-        {
+        if !valid_upload_envelope(envelope) {
             return Err(ApiError::InvalidResponse);
         }
         let expanded = canonical::canonical_json(
@@ -431,14 +598,13 @@ impl ApiClient {
             return Err(ApiError::SegmentTooLarge);
         }
         let envelope_hash = hex::encode(Sha256::digest(&expanded));
-        let mut segment = json!({"dataset":envelope.dataset,"kind":envelope.kind,"scope":envelope.scope,"subjectId":envelope.subject_id,"coverage":envelope.coverage,"payloadHash":envelope.payload_hash,"envelopeHash":envelope_hash,"compressedBytes":compressed.len(),"expandedBytes":expanded.len()});
-        if envelope.kind == DatasetKind::Events {
-            segment.as_object_mut().expect("segment is an object").insert(
-                "eventRange".into(),
-                json!({"firstSequence":envelope.export_sequence,"lastSequence":envelope.export_sequence}),
-            );
-        }
-        let manifest = json!({"schemaVersion":1,"protocolVersion":"1.0","guildKey":envelope.guild_key,"guild":envelope.guild,"sourceCharacter":envelope.source_character,"installationId":envelope.installation_id,"exportSequence":envelope.export_sequence,"capturedAt":envelope.captured_at.to_rfc3339_opts(SecondsFormat::Secs,true),"segments":[segment]});
+        let manifest = build_sync_manifest(
+            envelope,
+            queued_at,
+            &envelope_hash,
+            compressed.len(),
+            expanded.len(),
+        )?;
         let manifest_hash = canonical::sha256_hex(&manifest);
         let start_body =
             canonical::canonical_json(&json!({"manifest":manifest,"manifestHash":manifest_hash}));
@@ -449,6 +615,8 @@ impl ApiClient {
             .await?;
         let start: SyncStartResponse = parse_response(response).await?;
         if !valid_token(&start.session_id)
+            || start.expires_at <= Utc::now()
+            || start.expires_at > Utc::now() + chrono::Duration::hours(1)
             || !server_chunk_limits_support_client(
                 start.max_compressed_chunk_bytes,
                 start.max_expanded_chunk_bytes,
@@ -457,10 +625,11 @@ impl ApiClient {
         {
             return Err(ApiError::InvalidResponse);
         }
-        if start
-            .missing_envelope_hashes
-            .iter()
-            .any(|hash| hash != &envelope_hash)
+        if start.missing_envelope_hashes.len() > 1
+            || start
+                .missing_envelope_hashes
+                .iter()
+                .any(|hash| hash != &envelope_hash)
         {
             return Err(ApiError::InvalidResponse);
         }
@@ -489,10 +658,11 @@ impl ApiClient {
             .signed_request(Method::POST, &path, device_id, body)?
             .send()
             .await?;
-        if !response.status().is_success() {
-            return Err(response_error(response).await);
+        let commit: SyncCommitResponse = parse_response(response).await?;
+        if !valid_commit_response(&commit, envelope, Utc::now()) {
+            return Err(ApiError::InvalidResponse);
         }
-        Ok(())
+        Ok(commit)
     }
 
     fn signed_request(
@@ -545,6 +715,26 @@ impl ApiClient {
             .store_secure(SIGNING_KEY_NAME, &signing.to_bytes())?;
         Ok(signing)
     }
+}
+
+fn build_http_client(https_only: bool) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .https_only(https_only)
+        .redirect(Policy::none())
+        .user_agent(format!("EmberSync/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+}
+
+fn valid_commit_response(
+    commit: &SyncCommitResponse,
+    envelope: &UploadEnvelope,
+    now: DateTime<Utc>,
+) -> bool {
+    matches!(commit.status.as_str(), "committed" | "already_committed")
+        && commit.accepted_sequence == envelope.export_sequence
+        && commit.committed_at <= now + chrono::Duration::minutes(5)
+        && commit.committed_at >= envelope.captured_at - chrono::Duration::days(365)
 }
 
 async fn parse_response<T: for<'de> Deserialize<'de>>(
@@ -631,12 +821,178 @@ fn device_name() -> String {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
     #[test]
     fn token_validation_rejects_path_injection() {
         assert!(valid_token("device_1234567890"));
         assert!(!valid_token("../../other-session"));
         assert!(!valid_token("short"));
     }
+
+    #[tokio::test]
+    async fn upload_client_refuses_cross_origin_and_same_origin_redirects() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/target", server.uri())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/target"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let response = build_http_client(false)
+            .unwrap()
+            .get(format!("{}/redirect", server.uri()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+    }
+
+    #[test]
+    fn commit_response_must_acknowledge_the_exact_uploaded_sequence() {
+        let captured_at = Utc::now() - chrono::Duration::minutes(1);
+        let envelope: UploadEnvelope = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "protocolVersion": "1.0",
+            "dataset": "guild",
+            "kind": "state",
+            "scope": "guild",
+            "subjectId": "main",
+            "guildKey": "main",
+            "guild": crate::guild::canonical(GuildKey::Main),
+            "sourceCharacter": {
+                "guid": "Player-1-ABCDEF01",
+                "name": "Ember",
+                "realm": "Dalaran",
+                "realmSlug": "dalaran"
+            },
+            "installationId": "AbCdEf0123_-xYz9",
+            "exportSequence": 7,
+            "capturedAt": captured_at,
+            "coverage": {
+                "status": "complete",
+                "observedAt": captured_at
+            },
+            "permissionEvidence": {},
+            "payloadHash": "0".repeat(64),
+            "payload": {}
+        }))
+        .unwrap();
+        let now = Utc::now();
+        let valid = SyncCommitResponse {
+            status: "committed".into(),
+            committed_at: now,
+            accepted_sequence: 7,
+        };
+        assert!(valid_commit_response(&valid, &envelope, now));
+        assert!(!valid_commit_response(
+            &SyncCommitResponse {
+                accepted_sequence: 8,
+                ..valid
+            },
+            &envelope,
+            now
+        ));
+    }
+
+    fn raw_upload_envelope(dataset: &str, kind: DatasetKind, sequence: u64) -> UploadEnvelope {
+        let captured_at = Utc::now() - chrono::Duration::minutes(1);
+        let (scope, subject_id, event_range, payload) = match kind {
+            DatasetKind::State => (
+                "character",
+                "Player-1-ABCDEF01".to_owned(),
+                None,
+                json!({"futureValue": 42}),
+            ),
+            DatasetKind::Events => (
+                "guild",
+                format!("AbCdEf0123_-xYz9:Player-1-ABCDEF01:{sequence}"),
+                Some(crate::models::EventRange {
+                    first_sequence: sequence,
+                    last_sequence: sequence,
+                }),
+                json!({"events":[{
+                    "sequence": sequence,
+                    "capturedAt": captured_at.timestamp(),
+                    "payload": {"futureValue": 42}
+                }]}),
+            ),
+        };
+        UploadEnvelope {
+            schema_version: 1,
+            protocol_version: "1.0".into(),
+            dataset: dataset.into(),
+            kind,
+            scope: scope.into(),
+            subject_id,
+            guild_key: GuildKey::Main,
+            guild: crate::guild::canonical(GuildKey::Main),
+            source_character: crate::models::SourceCharacter {
+                guid: "Player-1-ABCDEF01".into(),
+                name: "Ember".into(),
+                realm: "Dalaran".into(),
+                realm_slug: "dalaran".into(),
+            },
+            installation_id: "AbCdEf0123_-xYz9".into(),
+            export_sequence: sequence,
+            event_range,
+            captured_at,
+            persisted_at: captured_at.timestamp() + 5,
+            coverage: crate::models::Coverage {
+                status: crate::models::CoverageStatus::Complete,
+                reason_code: None,
+                observed_at: captured_at,
+                metadata: None,
+            },
+            permission_evidence: json!({}),
+            payload_hash: canonical::sha256_hex(&payload),
+            payload,
+        }
+    }
+
+    #[test]
+    fn bounded_future_state_and_event_batches_pass_signed_upload_validation() {
+        let state = raw_upload_envelope("future_metric", DatasetKind::State, 7);
+        assert!(valid_upload_envelope(&state));
+
+        let event = raw_upload_envelope("events.future_stream", DatasetKind::Events, 8);
+        assert!(valid_upload_envelope(&event));
+        let queued_at = event.persisted_at + 3;
+        let manifest = build_sync_manifest(&event, queued_at, &"a".repeat(64), 100, 200).unwrap();
+        assert_eq!(manifest["persistedAt"], event.persisted_at);
+        assert_eq!(manifest["queuedAt"], queued_at);
+        assert_eq!(manifest["segments"][0]["dataset"], "events.future_stream");
+        assert_eq!(manifest["segments"][0]["eventRange"]["lastSequence"], 8);
+
+        let mut wrong_kind = state.clone();
+        wrong_kind.dataset = "events.future_stream".into();
+        assert!(!valid_upload_envelope(&wrong_kind));
+
+        let mut mismatched_range = event.clone();
+        mismatched_range.event_range.as_mut().unwrap().last_sequence = 9;
+        assert!(!valid_upload_envelope(&mismatched_range));
+
+        let mut mismatched_payload = event;
+        mismatched_payload.payload["events"][0]["sequence"] = json!(9);
+        mismatched_payload.payload_hash = canonical::sha256_hex(&mismatched_payload.payload);
+        assert!(!valid_upload_envelope(&mismatched_payload));
+
+        let mut missing_persistence = state;
+        missing_persistence.persisted_at = 0;
+        assert!(!valid_upload_envelope(&missing_persistence));
+    }
+
     #[test]
     fn signing_context_matches_protocol() {
         let method = Method::POST;

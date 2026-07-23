@@ -1,9 +1,14 @@
-import { CloudUpload, ExternalLink, KeyRound, LockKeyhole, RefreshCw, ShieldAlert } from "lucide-react";
+import { Clock3, CloudUpload, ExternalLink, KeyRound, LockKeyhole, RefreshCw, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 import { openTrustedWebsiteUrl, syncNow, unlockWithPassphrase } from "../../api/desktop";
 import type { DesktopStatus } from "../../types";
 
 const BATTLE_NET_REAUTH_URL = "https://rainingembers.org/api/auth/battlenet/start?return_to=%2Fmembers%3Fview%3Dsettings";
+
+function formatDate(value?: string): string {
+  if (!value) return "starting shortly";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
 
 export function QueueScreen({ status, onRefresh }: { status: DesktopStatus; onRefresh: () => void }) {
   const [passphrase, setPassphrase] = useState("");
@@ -12,6 +17,7 @@ export function QueueScreen({ status, onRefresh }: { status: DesktopStatus; onRe
   const [syncError, setSyncError] = useState<string | null>(null);
   const actionRequired = status.queue.actionRequired ?? 0;
   const authorizationRequired = status.queue.authorizationRequired ?? false;
+  const automaticSyncReady = status.connection === "paired" && status.vault === "ready";
   const sync = async () => {
     setSyncError(null);
     try {
@@ -43,6 +49,15 @@ export function QueueScreen({ status, onRefresh }: { status: DesktopStatus; onRe
         <MetricRow label="Uploading" value={status.queue.uploading} />
         <MetricRow label="Retry later" value={status.queue.failed} warning={status.queue.failed > 0} />
         <MetricRow label="Needs attention" value={actionRequired} warning={actionRequired > 0} />
+      </div>
+      <div className="auto-sync-status" role="status">
+        <Clock3 size={22} />
+        <div>
+          <strong>Automatic sync every {status.autoSyncIntervalMinutes} minutes</strong>
+          <p>{automaticSyncReady
+            ? `Next SavedVariables check and upload: ${formatDate(status.nextAutoSyncAt)}. You can close this window; EmberSync continues from the system tray.`
+            : "Automatic uploads resume after this device is connected and its encrypted local vault is unlocked."}</p>
+        </div>
       </div>
       {authorizationRequired ? <div className="authorization-required" role="status"><ShieldAlert size={24} /><div><strong>Battle.net verification is required</strong><p>The website paused these encrypted uploads until your Battle.net characters and current guild membership are verified again. Reverify on rainingembers.org, return here, then select Process queue.</p></div><button className="primary-button" type="button" onClick={() => void openTrustedWebsiteUrl(BATTLE_NET_REAUTH_URL)}><ExternalLink size={16} /> Reverify with Battle.net</button></div> : null}
       {syncError && !authorizationRequired ? <p className="queue-sync-error" role="alert">{syncError}</p> : null}

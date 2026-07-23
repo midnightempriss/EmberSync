@@ -9,7 +9,11 @@
     },
     "installationId": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]{16,128}$"
+      "pattern": "^[A-Za-z0-9_-]{16}$"
+    },
+    "legacyInstallationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,128}$"
     },
     "sha256Hex": {
       "type": "string",
@@ -20,19 +24,37 @@
     },
     "stateDatasetName": {
       "enum": [
-        "auction_house", "calendar", "character", "guild_chat", "collections",
+        "auction_house", "calendar", "character", "collections",
         "crafting", "damage_meter", "guild", "guild_bank", "housing",
         "inventory", "mail_metadata", "mythic_plus", "professions",
-        "progression", "pvp"
+        "progression", "pvp", "world_quests"
       ]
     },
     "eventDatasetName": {
-      "enum": ["events.guild_chat", "events.officer_chat"]
+      "enum": [
+        "events.guild_chat", "events.officer_chat", "events.guild",
+        "events.guild_bank", "events.guild_presence",
+        "events.neighborhood_initiative"
+      ]
     },
     "datasetName": {
       "oneOf": [
         { "$ref": "#/$defs/stateDatasetName" },
         { "$ref": "#/$defs/eventDatasetName" }
+      ]
+    },
+    "boundedStateDatasetName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "boundedEventDatasetName": {
+      "type": "string",
+      "pattern": "^events\\.[a-z][a-z0-9_]{0,63}$"
+    },
+    "uploadDatasetName": {
+      "oneOf": [
+        { "$ref": "#/$defs/boundedStateDatasetName" },
+        { "$ref": "#/$defs/boundedEventDatasetName" }
       ]
     },
     "datasetScope": {
@@ -168,14 +190,17 @@
       "required": ["schemaVersion", "dataset", "scope", "subjectId", "guildKey", "guild", "sourceCharacter", "installationId", "sequence", "capturedAt", "coverage", "payload"],
       "properties": {
         "schemaVersion": { "const": 1 },
-        "dataset": { "$ref": "#/$defs/stateDatasetName" },
+        "dataset": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
         "scope": { "$ref": "#/$defs/datasetScope" },
         "subjectId": { "type": "string", "minLength": 1, "maxLength": 256 },
         "guildKey": { "$ref": "#/$defs/guildKey" },
         "guild": { "$ref": "#/$defs/addonGuild" },
         "sourceCharacter": { "$ref": "#/$defs/addonSourceCharacter" },
-        "installationId": { "$ref": "#/$defs/installationId" },
-        "sequence": { "type": "integer", "minimum": 0 },
+        "installationId": { "$ref": "#/$defs/legacyInstallationId" },
+        "sequence": { "type": "integer", "minimum": 1 },
         "capturedAt": { "type": "integer", "minimum": 1 },
         "coverage": { "$ref": "#/$defs/addonCoverage" },
         "permissionEvidence": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
@@ -199,7 +224,7 @@
       "type": "object",
       "required": ["sequence", "capturedAt", "guildKey", "sourceCharacter", "payload"],
       "properties": {
-        "sequence": { "type": "integer", "minimum": 0 },
+        "sequence": { "type": "integer", "minimum": 1 },
         "capturedAt": { "type": "integer", "minimum": 1 },
         "guildKey": { "$ref": "#/$defs/guildKey" },
         "sourceCharacter": { "$ref": "#/$defs/addonSourceCharacter" },

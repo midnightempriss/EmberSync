@@ -1,7 +1,11 @@
 dc2f358188d706d01e5c50098a968c6d309e67a50d2b26067b4aa335d54d6601  EmberSync-0.1.0-addon.zip
 daa729361b5abcb5ed033266dff9167e85994290986891fbce9429c6369d9062  EmberSync-0.1.1-addon.zip
 c1fcd7550617fd583b6dd837a6a988f150a30be94a35db15cb6fd339b6787a1a  EmberSync-0.1.2-addon.zip
+29cc42fa386906c045dc45717638427a64760b35e1c9c26f6b21dfffb477b042  EmberSync-0.1.3-addon.zip
+a58ded0fc10613240a452e742be78738301329326759090b107f970d617ee68c  EmberSync-0.1.4-addon.zip
 ea65a7043740beedf33bdaaec05406795b0aa20632a5cc4f3b99eca6e086ce12  windows/EmberSync_0.1.0_x64-setup.exe
 c9e2442a8a1d0e778c0b80a8b4f250dcf3ce5db09d4141b6c3c3e34e63c49bcb  windows/EmberSync_0.1.0_x64-setup.exe.sig
 c7bba6dddd349a5dacc621f2bd69fd54e9b0f58704a2f5a09a1f6b88381bfae5  windows/EmberSync_0.1.1_x64-setup.exe
 d5bb6246bbafdcde0d5ecb8b5f82d4fcaa9e82447557a3b456560e9932606983  windows/EmberSync_0.1.2_x64-setup.exe
+5969a2af4cd07ea3f226f180524449c2e18b4d61f8ddc6aea6cf2de96b74607e  windows/EmberSync_0.1.3_x64-setup.exe
+8a5709c54e9401a5bdacbad8c77983379d9d0ec8237e2fecaef413bf115236e4  windows/EmberSync_0.1.4_x64-setup.exe

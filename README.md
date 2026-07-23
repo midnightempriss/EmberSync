@@ -66,6 +66,10 @@ Installation and release-maintainer instructions live in
 
 ## Status
 
-Version `0.1.2` repairs website revocation, drains the encrypted queue through
-one safe upload worker, reduces redundant Blizzard verification, and keeps
-Rust/JavaScript payload signing byte-for-byte compatible.
+Version `0.1.4` keeps the 15-minute guarded background scan while adding
+secret-safe collection, passive calendar and world-quest discovery,
+multi-subdivision housing retention, first-class coverage synchronization, and
+one canonical dataset contract from the addon through the website. Existing
+0.1.3 state is reconciled once after upgrade so corrected G.M.O.D., guild
+metrics, and Neighborhood projections can be rebuilt without deleting local
+data.

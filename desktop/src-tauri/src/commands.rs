@@ -12,6 +12,7 @@ pub struct PairingStartView {
     pub verification_uri: String,
     pub user_code: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub poll_interval_seconds: u64,
 }
 
 #[tauri::command]
@@ -43,27 +44,34 @@ pub async fn add_wow_root(
     state.restart_watcher(app.clone())?;
     let owned = state.inner().clone();
     let scan_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || owned.scan(&scan_app))
+    let status = tauri::async_runtime::spawn_blocking(move || owned.scan(&scan_app))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??;
+    state.schedule_automatic_sync(app, SyncTrigger::Scheduled);
+    Ok(status)
 }
 
 #[tauri::command]
 pub async fn scan_now(app: AppHandle, state: State<'_, AppState>) -> Result<DesktopStatus, String> {
     let owned = state.inner().clone();
     let scan_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || owned.scan(&scan_app))
+    let status = tauri::async_runtime::spawn_blocking(move || owned.scan(&scan_app))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??;
+    state.schedule_automatic_sync(app, SyncTrigger::Scheduled);
+    Ok(status)
 }
 
 #[tauri::command]
 pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<DesktopStatus, String> {
-    state.sync_queue(&app, SyncTrigger::Manual).await
+    state.rescan_and_sync(&app, SyncTrigger::Manual).await
 }
 
 #[tauri::command]
-pub async fn start_pairing(state: State<'_, AppState>) -> Result<PairingStartView, String> {
+pub async fn start_pairing(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PairingStartView, String> {
     let (response, pending) = state
         .api()
         .start_pairing()
@@ -73,10 +81,12 @@ pub async fn start_pairing(state: State<'_, AppState>) -> Result<PairingStartVie
         .config()
         .set_pending_pairing(Some(pending))
         .map_err(|error| error.to_string())?;
+    state.start_pairing_poll(app, response.poll_interval_seconds);
     Ok(PairingStartView {
         verification_uri: response.verification_uri,
         user_code: response.verification_code,
         expires_at: response.expires_at,
+        poll_interval_seconds: response.poll_interval_seconds,
     })
 }
 
@@ -114,6 +124,7 @@ pub async fn poll_pairing(
             "This device was paired with a verified Raining Embers member.".into(),
         );
         state.emit(&app);
+        state.schedule_automatic_sync(app.clone(), SyncTrigger::Scheduled);
     }
     Ok(state.status())
 }
@@ -177,9 +188,11 @@ pub async fn unlock_with_passphrase(
         .map_err(|error| error.to_string())?;
     let owned = state.inner().clone();
     let scan_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || owned.scan(&scan_app))
+    let status = tauri::async_runtime::spawn_blocking(move || owned.scan(&scan_app))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??;
+    state.schedule_automatic_sync(app, SyncTrigger::Scheduled);
+    Ok(status)
 }
 
 #[tauri::command]

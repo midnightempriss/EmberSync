@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub const AUTO_SYNC_INTERVAL_MINUTES: u64 = 15;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GuildKey {
@@ -152,6 +154,8 @@ pub struct RawGuildExport {
     pub events: serde_json::Map<String, Value>,
     #[serde(default)]
     pub coverage: serde_json::Map<String, Value>,
+    #[serde(default)]
+    pub collector_health: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,11 +184,22 @@ pub struct UploadEnvelope {
     pub source_character: SourceCharacter,
     pub installation_id: String,
     pub export_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_range: Option<EventRange>,
     pub captured_at: DateTime<Utc>,
+    #[serde(default)]
+    pub persisted_at: i64,
     pub coverage: Coverage,
     pub permission_evidence: Value,
     pub payload_hash: String,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventRange {
+    pub first_sequence: u64,
+    pub last_sequence: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -253,6 +268,8 @@ pub struct DesktopStatus {
     pub discovered_files: usize,
     pub last_scan_at: Option<DateTime<Utc>>,
     pub last_upload_at: Option<DateTime<Utc>>,
+    pub next_auto_sync_at: Option<DateTime<Utc>>,
+    pub auto_sync_interval_minutes: u64,
     pub message: Option<String>,
     pub guilds: Vec<GuildStatus>,
     pub queue: QueueSummary,
@@ -271,6 +288,8 @@ impl Default for DesktopStatus {
             discovered_files: 0,
             last_scan_at: None,
             last_upload_at: None,
+            next_auto_sync_at: None,
+            auto_sync_interval_minutes: AUTO_SYNC_INTERVAL_MINUTES,
             message: None,
             guilds: vec![],
             queue: QueueSummary::default(),

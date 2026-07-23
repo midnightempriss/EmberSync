@@ -3,9 +3,12 @@
   "$id": "https://rainingembers.org/schemas/embersync/saved-variables-v1.schema.json",
   "title": "EmberSyncDB schema v1",
   "type": "object",
-  "required": ["schemaVersion", "exports"],
+  "required": ["schemaVersion", "installationId", "exports"],
   "properties": {
     "schemaVersion": { "const": 1 },
+    "installationId": { "$ref": "common-v1.schema.json#/$defs/legacyInstallationId" },
+    "createdAt": { "type": "integer", "minimum": 1 },
+    "updatedAt": { "type": "integer", "minimum": 1 },
     "exports": {
       "type": "object",
       "properties": {
@@ -24,16 +27,17 @@
         "schemaVersion": { "const": 1 },
         "guild": { "$ref": "common-v1.schema.json#/$defs/addonGuild" },
         "sourceCharacter": { "$ref": "common-v1.schema.json#/$defs/addonSourceCharacter" },
-        "installationId": { "$ref": "common-v1.schema.json#/$defs/installationId" },
-        "sequence": { "type": "integer", "minimum": 0 },
+        "installationId": { "$ref": "common-v1.schema.json#/$defs/legacyInstallationId" },
+        "sequence": { "type": "integer", "minimum": 1 },
         "capturedAt": { "type": "integer", "minimum": 1 },
-        "persistedAt": { "$ref": "common-v1.schema.json#/$defs/utcInstant" },
+        "persistedAt": { "type": "integer", "minimum": 1 },
         "datasets": {
           "type": "object",
           "additionalProperties": { "$ref": "common-v1.schema.json#/$defs/addonDatasetEnvelope" }
         },
         "events": {
           "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
           "additionalProperties": {
             "type": "array",
             "items": { "$ref": "common-v1.schema.json#/$defs/addonEvent" }

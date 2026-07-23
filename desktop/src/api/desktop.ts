@@ -13,6 +13,7 @@ const browserFallbackStatus: DesktopStatus = {
   connection: "unpaired",
   watcherRunning: false,
   discoveredFiles: 0,
+  autoSyncIntervalMinutes: 15,
   guilds: [],
   queue: { pending: 0, uploading: 0, failed: 0, actionRequired: 0, authorizationRequired: false, bytesEncrypted: 0 },
   roots: [],

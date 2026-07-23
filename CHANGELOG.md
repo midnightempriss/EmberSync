@@ -3,6 +3,73 @@
 All notable EmberSync changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 0.1.4 - 2026-07-23
+
+### Added
+
+- Added one canonical state/event registry across the addon, protocol, desktop,
+  and website, including passive `world_quests` collection and the previously
+  unregistered guild, bank, presence, and neighborhood event streams.
+- Added component-level guild readiness, durable collector health, coverage-only
+  synchronization, passive calendar initialization, and a persistent
+  multi-subdivision housing catalog with direct versus derived provenance.
+- Added a leader-only website synchronization-health view and protected member
+  calendar/world-quest projections without exposing raw payload contents.
+- Added a one-time state reconciliation epoch so existing encrypted 0.1.3 data
+  is re-sent once and can be rebuilt by the corrected website projections.
+
+### Fixed
+
+- Guarded secret WoW values before string, number, copy, comparison, and size
+  operations so temporarily protected guild data fails closed instead of
+  repeatedly interrupting collection.
+- Projected G.M.O.D. from the real `guild.motd` field and normalized the actual
+  roster, note, presence, Guild Bank item, transaction, calendar, and housing
+  payload shapes.
+- Prevented missing or not-yet-loaded metrics from being displayed as genuine
+  zeroes, retained same-guild last-good G.M.O.D. values, and distinguished
+  explicit empty messages from unavailable data.
+- Batched contiguous event ranges, isolated unsupported data, tightened signed
+  upload redirects and commit validation, and made receipt/coalescing identity
+  include dataset, scope, subject, sequence, and freshness.
+- Reduced idle desktop work with SavedVariables path filtering and file
+  fingerprints, and added zero-touch Battle.net installation discovery for
+  custom World of Warcraft drives.
+
+## 0.1.3 - 2026-07-22
+
+### Added
+
+- Added a guarded automatic desktop scan and upload every 15 minutes while the
+  client is paired and its encrypted vault is unlocked.
+- Added clearer in-game actions and notes for data that requires an open game
+  window or is still loading.
+
+### Fixed
+
+- Captured short-lived Auction House, calendar, crafting, Guild Bank, bank,
+  mailbox, and profession contexts promptly without bypassing frame-friendly
+  debounce behavior.
+- Preserved same-character last-good fields when a later observation is
+  partial, while keeping source-character provenance isolated.
+- Corrected readiness reporting for collections and progression so an empty or
+  failed API response is not mislabeled complete.
+- Serialized Guild Bank tab requests, kept closed-context coverage separate
+  from the original bank-payload provenance, pruned catalogs for unlearned
+  professions, and removed expensive synchronous logout recrawls.
+- Accepted retained datasets and events from each eligible source character
+  instead of incorrectly requiring every envelope to match the latest export
+  character.
+- Coalesced duplicate character coverage rows in the desktop interface.
+- Persisted acknowledged envelope hashes so scheduled rescans do not re-upload
+  unchanged state or retained event history.
+- Resolved the mixed neighborhood identity Retail can report for Raining Embers
+  Alts by binding neighborhood, Endeavor, and activity data to a strict live
+  GUID consensus instead of a stale bulletin-board GUID.
+- Kept rejected or cross-GUID neighborhood data out of guild exports, delayed
+  initiative events until neighborhood verification succeeds, and made
+  interaction guidance name the character's approved main or alt guild.
+
 ## 0.1.2 - 2026-07-22
 
 ### Fixed

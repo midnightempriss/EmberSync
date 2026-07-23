@@ -12,6 +12,11 @@ local Mail = {
         "MAIL_SUCCESS",
         "UPDATE_PENDING_MAIL",
     },
+    priorityEvents = {
+        MAIL_SHOW = true,
+        MAIL_INBOX_UPDATE = true,
+        MAIL_SUCCESS = true,
+    },
     isOpen = false,
     debounce = 1,
     minInterval = 5,
@@ -22,6 +27,7 @@ function Mail:HandleEvent(_, event)
         self.isOpen = true
     elseif event == "MAIL_CLOSED" then
         self.isOpen = false
+        return false
     end
 end
 
@@ -34,33 +40,52 @@ function Mail:Collect(context)
         return {}, Coverage.Unsupported("mail_api_unavailable"), context.sourceCharacter.id
     end
     if not self.isOpen then
-        return {}, Coverage.Interaction("open_mailbox"), context.sourceCharacter.id
+        return {}, Coverage.Interaction("open_mailbox", {
+            opportunity = "Open a mailbox and wait for the inbox headers to finish loading.",
+        }), context.sourceCharacter.id
     end
-    local numberOfItems, totalItems = _G.GetInboxNumItems()
+    local countOk, numberOfItems, totalItems = pcall(_G.GetInboxNumItems)
+    if not countOk or type(numberOfItems) ~= "number" or type(totalItems) ~= "number" then
+        return {}, Coverage.Partial("mail_headers_loading", {
+            opportunity = "Keep the mailbox open while the inbox header count loads.",
+        }), context.sourceCharacter.id
+    end
     local messages = {}
+    local headersReady = true
     for index = 1, (numberOfItems or 0) do
-        local packageIcon, stationeryIcon, sender, subject, money, codAmount, daysLeft,
-            itemCount, wasRead, wasReturned, textCreated, canReply, isGM = _G.GetInboxHeaderInfo(index)
-        messages[#messages + 1] = {
-            index = index,
-            packageIcon = packageIcon,
-            stationeryIcon = stationeryIcon,
-            sender = sender,
-            subject = subject,
-            money = money,
-            codAmount = codAmount,
-            daysLeft = daysLeft,
-            itemCount = itemCount,
-            wasRead = wasRead,
-            wasReturned = wasReturned,
-            textCreated = textCreated,
-            canReply = canReply,
-            isGM = isGM,
-        }
+        local values = { pcall(_G.GetInboxHeaderInfo, index) }
+        if not values[1] or values[4] == nil then
+            headersReady = false
+        else
+            messages[#messages + 1] = {
+                index = index,
+                packageIcon = values[2],
+                stationeryIcon = values[3],
+                sender = values[4],
+                subject = values[5],
+                money = values[6],
+                codAmount = values[7],
+                daysLeft = values[8],
+                itemCount = values[9],
+                wasRead = values[10],
+                wasReturned = values[11],
+                textCreated = values[12],
+                canReply = values[13],
+                isGM = values[14],
+            }
+        end
     end
     -- Mail bodies and invoice text are deliberately never requested.
-    return { loadedCount = numberOfItems, totalCount = totalItems, headers = messages },
-        Coverage.Complete({ messageCount = #messages }), context.sourceCharacter.id
+    local payload = { loadedCount = numberOfItems, totalCount = totalItems, headers = messages }
+    if numberOfItems < totalItems or not headersReady or #messages < numberOfItems then
+        return payload, Coverage.Partial("mail_headers_partially_loaded", {
+            loadedCount = #messages,
+            totalCount = totalItems,
+            opportunity = "Keep the mailbox open while the remaining inbox headers load.",
+        }), context.sourceCharacter.id
+    end
+    return payload, Coverage.Complete({ messageCount = #messages, totalCount = totalItems }),
+        context.sourceCharacter.id
 end
 
 EmberSync.CollectorManager:Register(Mail)

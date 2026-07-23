@@ -37,20 +37,20 @@ function Coverage.Partial(reason, details)
     return Coverage.New(Constants.COVERAGE.PARTIAL, reason, details)
 end
 
-function Coverage.Unsupported(reason)
-    return Coverage.New(Constants.COVERAGE.UNSUPPORTED, reason or "api_not_available")
+function Coverage.Unsupported(reason, details)
+    return Coverage.New(Constants.COVERAGE.UNSUPPORTED, reason or "api_not_available", details)
 end
 
-function Coverage.Interaction(reason)
-    return Coverage.New(Constants.COVERAGE.INTERACTION_REQUIRED, reason)
+function Coverage.Interaction(reason, details)
+    return Coverage.New(Constants.COVERAGE.INTERACTION_REQUIRED, reason, details)
 end
 
-function Coverage.Forbidden(reason)
-    return Coverage.New(Constants.COVERAGE.FORBIDDEN, reason)
+function Coverage.Forbidden(reason, details)
+    return Coverage.New(Constants.COVERAGE.FORBIDDEN, reason, details)
 end
 
-function Coverage.Unavailable(reason)
-    return Coverage.New(Constants.COVERAGE.UNAVAILABLE, reason)
+function Coverage.Unavailable(reason, details)
+    return Coverage.New(Constants.COVERAGE.UNAVAILABLE, reason, details)
 end
 
 EmberSync:RegisterModule("Coverage", Coverage)

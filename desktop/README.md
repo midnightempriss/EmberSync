@@ -17,6 +17,25 @@ segments locally, and uploads them with an Ed25519 device identity.
 - Website requests are restricted to `https://rainingembers.org`, signed with
   Ed25519, and follow the contracts in `../protocol`.
 
+## Automatic sync
+
+The watcher scans immediately when a selected SavedVariables file changes.
+It also performs a guarded scan every 15 minutes and uploads any queued changes
+while the device is paired and its vault is unlocked. Empty queues do not make
+an upload request, overlapping workers are coalesced, and website
+authorization failures remain paused for the user instead of retrying
+indefinitely. A durable local acknowledgement index prevents unchanged state
+and retained event history from being re-queued by later scheduled scans.
+Bounded future dataset and event names are uploaded for encrypted raw retention
+but remain ineligible for typed website projections until registered. Invalid
+segments and non-transient server rejections are isolated without stopping
+other queued datasets.
+
+World of Warcraft writes account SavedVariables to disk on reload, logout,
+disconnect, or client exit. The desktop timer cannot force the game to persist
+new in-memory addon data, so `/reload` remains the quickest way to make a
+fresh in-game capture available to the desktop while staying logged in.
+
 ## Development
 
 ```powershell

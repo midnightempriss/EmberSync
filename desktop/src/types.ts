@@ -31,6 +31,8 @@ export interface DesktopStatus {
   discoveredFiles: number;
   lastScanAt?: string;
   lastUploadAt?: string;
+  nextAutoSyncAt?: string;
+  autoSyncIntervalMinutes: number;
   message?: string;
   guilds: GuildStatus[];
   queue: QueueSummary;
@@ -65,4 +67,5 @@ export interface PairingStart {
   verificationUri: string;
   userCode: string;
   expiresAt: string;
+  pollIntervalSeconds: number;
 }

@@ -8,6 +8,7 @@ mod ingest;
 mod lua;
 mod models;
 mod queue;
+mod registry;
 mod state;
 mod watcher;
 
@@ -50,9 +51,13 @@ pub fn run() {
                 }
             }
             if let Err(error)=state.start_watcher(app.handle().clone()){state.diagnostic(models::DiagnosticLevel::Warning,format!("SavedVariables watcher could not start: {error}"));}
+            state.start_auto_sync(app.handle().clone());
+            if state.config().snapshot().pending_pairing.is_some() {
+                state.start_pairing_poll(app.handle().clone(), 5);
+            }
             let scan_state=state.clone();let scan_app=app.handle().clone();tauri::async_runtime::spawn_blocking(move||{
                 match scan_state.scan(&scan_app) {
-                    Ok(_) => scan_state.schedule_sync(scan_app, SyncTrigger::Startup),
+                    Ok(_) => scan_state.schedule_automatic_sync(scan_app, SyncTrigger::Startup),
                     Err(error) => scan_state.diagnostic(models::DiagnosticLevel::Warning,format!("Startup scan could not complete safely: {error}")),
                 }
             });
@@ -81,7 +86,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             }
             "sync" => {
                 let state = app.state::<AppState>().inner().clone();
-                state.schedule_sync(app.clone(), SyncTrigger::Tray);
+                state.schedule_rescan_and_sync(app.clone(), SyncTrigger::Tray);
             }
             "quit" => app.exit(0),
             _ => {}

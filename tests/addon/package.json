@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "fixture:generate": "node generate-golden-fixture.mjs"
   },
   "devDependencies": {
     "fengari": "0.1.5",

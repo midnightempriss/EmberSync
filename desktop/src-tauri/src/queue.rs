@@ -1,6 +1,7 @@
 use crate::{
     canonical,
     models::{DatasetKind, QueueSummary, UploadEnvelope},
+    registry,
 };
 use argon2::Argon2;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
@@ -21,6 +22,12 @@ const KEYRING_USER: &str = "local-queue-master-key-v1";
 const VERIFIER: &[u8] = b"EmberSync passphrase vault v1";
 const AUTHORIZATION_REQUIRED_META: &str = "upload_authorization_required";
 const AUTHORIZATION_REQUIRED_PREFIX: &str = "authorization required: ";
+const ACTION_REQUIRED_PREFIX: &str = "action required: ";
+const VAULT_MODE_META: &str = "vault_mode";
+const VAULT_INITIALIZED_META: &str = "vault_initialized";
+const VAULT_MODE_OS: &str = "os";
+const VAULT_MODE_PASSPHRASE: &str = "passphrase";
+const RECEIPT_SCHEMA_EPOCH: i64 = 2;
 const NEVER_RETRY_AT: i64 = i64::MAX;
 const LEGACY_REAUTH_ERROR: &str =
     "%Sign in with Battle.net again before pairing or uploading with EmberSync.%";
@@ -33,6 +40,10 @@ pub enum QueueError {
     CredentialVault(String),
     #[error("stored credential has an invalid length")]
     InvalidCredential,
+    #[error("the configured vault key is missing; existing encrypted data was preserved")]
+    MissingCredential,
+    #[error("the requested vault mode does not match the existing encrypted data")]
+    VaultModeMismatch,
     #[error("incorrect passphrase")]
     IncorrectPassphrase,
     #[error("local database error: {0}")]
@@ -51,6 +62,7 @@ pub struct QueuedUpload {
     pub content_hash: String,
     pub envelope: UploadEnvelope,
     pub attempts: u32,
+    pub queued_at: i64,
 }
 
 pub struct QueueStore {
@@ -90,9 +102,41 @@ impl QueueStore {
                nonce BLOB NOT NULL CHECK (length(nonce) = 24),
                ciphertext BLOB NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS upload_receipts (
+               content_hash TEXT PRIMARY KEY,
+               kind TEXT NOT NULL CHECK (kind IN ('state','events')),
+               acknowledged_at INTEGER NOT NULL,
+               dataset TEXT,
+               scope TEXT,
+               subject_id TEXT,
+               guild_key TEXT,
+               installation_id TEXT,
+               first_sequence INTEGER,
+               last_sequence INTEGER,
+               captured_at INTEGER,
+               committed_at INTEGER,
+               result TEXT,
+               receipt_epoch INTEGER NOT NULL DEFAULT 1
+             );
              CREATE INDEX IF NOT EXISTS upload_queue_ready ON upload_queue(status, next_attempt_at, id);"
         )?;
+        for (column, declaration) in [
+            ("dataset", "TEXT"),
+            ("scope", "TEXT"),
+            ("subject_id", "TEXT"),
+            ("guild_key", "TEXT"),
+            ("installation_id", "TEXT"),
+            ("first_sequence", "INTEGER"),
+            ("last_sequence", "INTEGER"),
+            ("captured_at", "INTEGER"),
+            ("committed_at", "INTEGER"),
+            ("result", "TEXT"),
+            ("receipt_epoch", "INTEGER NOT NULL DEFAULT 1"),
+        ] {
+            ensure_column(&connection, "upload_receipts", column, declaration)?;
+        }
         migrate_legacy_authorization_failures(&connection)?;
+        reconcile_dataset_rows(&connection)?;
         Ok(Arc::new(Self {
             connection: Mutex::new(connection),
             key: Mutex::new(None),
@@ -100,11 +144,18 @@ impl QueueStore {
     }
 
     pub fn unlock_from_os_vault(&self) -> Result<(), QueueError> {
+        let mode = self.meta(VAULT_MODE_META)?;
+        if mode.as_deref() == Some(VAULT_MODE_PASSPHRASE) {
+            return Err(QueueError::VaultModeMismatch);
+        }
         let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
             .map_err(|error| QueueError::CredentialVault(error.to_string()))?;
         let bytes = match entry.get_secret() {
             Ok(secret) => secret,
             Err(keyring::Error::NoEntry) => {
+                if self.has_vault_history()? {
+                    return Err(QueueError::MissingCredential);
+                }
                 let mut generated = Zeroizing::new([0_u8; 32]);
                 OsRng.fill_bytes(generated.as_mut());
                 entry
@@ -117,6 +168,9 @@ impl QueueStore {
         let key: [u8; 32] = bytes
             .try_into()
             .map_err(|_| QueueError::InvalidCredential)?;
+        self.verify_key_for_existing_material(&key)?;
+        self.set_meta(VAULT_MODE_META, VAULT_MODE_OS)?;
+        self.set_meta(VAULT_INITIALIZED_META, "1")?;
         *self.key.lock() = Some(Zeroizing::new(key));
         Ok(())
     }
@@ -124,6 +178,15 @@ impl QueueStore {
     pub fn unlock_with_passphrase(&self, passphrase: &str) -> Result<(), QueueError> {
         if passphrase.chars().count() < 12 {
             return Err(QueueError::Derivation);
+        }
+        let existing_mode = self.meta(VAULT_MODE_META)?;
+        let existing_verifier = self.meta("passphrase_verifier")?;
+        if existing_mode.as_deref() == Some(VAULT_MODE_OS)
+            || (existing_mode.is_none()
+                && existing_verifier.is_none()
+                && self.has_encrypted_material()?)
+        {
+            return Err(QueueError::VaultModeMismatch);
         }
         let salt = {
             let connection = self.connection.lock();
@@ -153,7 +216,7 @@ impl QueueStore {
         Argon2::default()
             .hash_password_into(passphrase.as_bytes(), &salt, key.as_mut())
             .map_err(|_| QueueError::Derivation)?;
-        let verifier = self.meta("passphrase_verifier")?;
+        let verifier = existing_verifier;
         if let Some(encoded) = verifier {
             let bytes = STANDARD_NO_PAD
                 .decode(encoded)
@@ -162,9 +225,15 @@ impl QueueStore {
                 return Err(QueueError::IncorrectPassphrase);
             }
         } else {
+            if self.has_encrypted_material()? {
+                return Err(QueueError::VaultModeMismatch);
+            }
             let encrypted = encrypt_bytes(&key, VERIFIER)?;
             self.set_meta("passphrase_verifier", &STANDARD_NO_PAD.encode(encrypted))?;
         }
+        self.verify_key_for_existing_material(&key)?;
+        self.set_meta(VAULT_MODE_META, VAULT_MODE_PASSPHRASE)?;
+        self.set_meta(VAULT_INITIALIZED_META, "1")?;
         *self.key.lock() = Some(key);
         Ok(())
     }
@@ -176,21 +245,50 @@ impl QueueStore {
     pub fn enqueue(&self, envelope: &UploadEnvelope) -> Result<bool, QueueError> {
         let plaintext = canonical::canonical_json(&serde_json::to_value(envelope)?);
         let content_hash = hex::encode(sha2::Sha256::digest(&plaintext));
+        {
+            let connection = self.connection.lock();
+            let acknowledged: bool = connection.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM upload_receipts
+                   WHERE content_hash=?1 AND (kind='events' OR receipt_epoch>=?2)
+                 )",
+                params![&content_hash, RECEIPT_SCHEMA_EPOCH],
+                |row| row.get(0),
+            )?;
+            if acknowledged {
+                return Ok(false);
+            }
+        }
         let key_guard = self.key.lock();
         let key = key_guard.as_ref().ok_or(QueueError::Locked)?;
         let encrypted = encrypt_bytes(key, &plaintext)?;
         let (nonce, ciphertext) = encrypted.split_at(24);
         let coalesce_key = (envelope.kind == DatasetKind::State).then(|| {
             format!(
-                "{}:{}:{}:{}",
+                "{}:{}:{}:{}:{}",
                 envelope.guild_key.as_str(),
                 envelope.installation_id,
                 envelope.dataset,
+                envelope.scope,
                 envelope.subject_id
             )
         });
         let now = chrono::Utc::now().timestamp();
         let connection = self.connection.lock();
+        // Upload completion can race the encryption work above. Recheck while
+        // holding the same connection lock used for the queue insert so an
+        // envelope acknowledged during that window cannot be reintroduced.
+        let acknowledged: bool = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM upload_receipts
+               WHERE content_hash=?1 AND (kind='events' OR receipt_epoch>=?2)
+             )",
+            params![&content_hash, RECEIPT_SCHEMA_EPOCH],
+            |row| row.get(0),
+        )?;
+        if acknowledged {
+            return Ok(false);
+        }
         let authorization_error: Option<String> = connection
             .query_row(
                 "SELECT value FROM vault_meta WHERE key=?1",
@@ -198,19 +296,47 @@ impl QueueStore {
                 |row| row.get(0),
             )
             .optional()?;
-        let (status, next_attempt_at, last_error) = match authorization_error {
-            Some(error) => (
+        let valid_dataset_name = registry::is_bounded_upload_name(envelope.kind, &envelope.dataset);
+        let (status, next_attempt_at, last_error) = if !valid_dataset_name {
+            (
                 "failed",
                 NEVER_RETRY_AT,
-                Some(format_authorization_error(&error)),
-            ),
-            None => ("pending", 0, None),
+                Some(format_action_required_error(&format!(
+                    "invalid dataset name/kind {}",
+                    envelope.dataset
+                ))),
+            )
+        } else {
+            match authorization_error {
+                Some(error) => (
+                    "failed",
+                    NEVER_RETRY_AT,
+                    Some(format_authorization_error(&error)),
+                ),
+                None => ("pending", 0, None),
+            }
         };
+        if envelope.kind == DatasetKind::State {
+            if let Some(existing) = load_coalesced_envelope(
+                &connection,
+                key,
+                coalesce_key.as_deref().expect("state coalesces"),
+            )? {
+                if existing.export_sequence > envelope.export_sequence
+                    || (existing.export_sequence == envelope.export_sequence
+                        && (existing.captured_at > envelope.captured_at
+                            || (existing.captured_at == envelope.captured_at
+                                && existing.coverage.observed_at >= envelope.coverage.observed_at)))
+                {
+                    return Ok(false);
+                }
+            }
+        }
         let changed = if envelope.kind == DatasetKind::State {
             connection.execute(
                 "INSERT INTO upload_queue(content_hash,coalesce_key,guild_key,dataset,kind,nonce,ciphertext,status,attempts,next_attempt_at,last_error,created_at,updated_at)
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,?9,?10,?11,?11)
-                 ON CONFLICT(coalesce_key) DO UPDATE SET content_hash=excluded.content_hash,nonce=excluded.nonce,ciphertext=excluded.ciphertext,status=excluded.status,attempts=0,next_attempt_at=excluded.next_attempt_at,last_error=excluded.last_error,updated_at=excluded.updated_at
+                 ON CONFLICT(coalesce_key) DO UPDATE SET content_hash=excluded.content_hash,nonce=excluded.nonce,ciphertext=excluded.ciphertext,status=excluded.status,attempts=0,next_attempt_at=excluded.next_attempt_at,last_error=excluded.last_error,created_at=excluded.created_at,updated_at=excluded.updated_at
                  WHERE upload_queue.content_hash != excluded.content_hash",
                 params![content_hash, coalesce_key, envelope.guild_key.as_str(), envelope.dataset, kind_name(envelope.kind), nonce, ciphertext, status, next_attempt_at, last_error, now],
             )?
@@ -230,28 +356,37 @@ impl QueueStore {
         let connection = self.connection.lock();
         let now = chrono::Utc::now().timestamp();
         let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
-        let mut statement = connection.prepare("SELECT id,content_hash,nonce,ciphertext,attempts FROM upload_queue WHERE (status='pending' OR (status='failed' AND (last_error IS NULL OR last_error NOT LIKE ?3))) AND next_attempt_at <= ?1 ORDER BY id LIMIT ?2")?;
-        let rows =
-            statement.query_map(params![now, limit as i64, authorization_pattern], |row| {
+        let action_pattern = format!("{ACTION_REQUIRED_PREFIX}%");
+        let mut statement = connection.prepare("SELECT id,content_hash,nonce,ciphertext,attempts,created_at FROM upload_queue WHERE (status='pending' OR (status='failed' AND (last_error IS NULL OR (last_error NOT LIKE ?3 AND last_error NOT LIKE ?4)))) AND next_attempt_at <= ?1 ORDER BY id LIMIT ?2")?;
+        let rows = statement.query_map(
+            params![now, limit as i64, authorization_pattern, action_pattern],
+            |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
                     row.get::<_, Vec<u8>>(3)?,
                     row.get::<_, u32>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
-            })?;
+            },
+        )?;
         let mut uploads = Vec::new();
         for row in rows {
-            let (id, content_hash, nonce, ciphertext, attempts) = row?;
+            let (id, content_hash, nonce, ciphertext, attempts, queued_at) = row?;
             let mut combined = nonce;
             combined.extend_from_slice(&ciphertext);
             let plaintext = decrypt_bytes(key, &combined)?;
+            let mut envelope: UploadEnvelope = serde_json::from_slice(&plaintext)?;
+            if envelope.persisted_at <= 0 {
+                envelope.persisted_at = envelope.captured_at.timestamp();
+            }
             uploads.push(QueuedUpload {
                 id,
                 content_hash,
-                envelope: serde_json::from_slice(&plaintext)?,
+                envelope,
                 attempts,
+                queued_at,
             });
         }
         for upload in &uploads {
@@ -269,21 +404,73 @@ impl QueueStore {
     pub fn has_ready_now(&self) -> Result<bool, QueueError> {
         let now = chrono::Utc::now().timestamp();
         let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
+        let action_pattern = format!("{ACTION_REQUIRED_PREFIX}%");
         self.connection
             .lock()
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM upload_queue WHERE (status='pending' OR (status='failed' AND (last_error IS NULL OR last_error NOT LIKE ?2))) AND next_attempt_at <= ?1)",
-                params![now, authorization_pattern],
+                "SELECT EXISTS(SELECT 1 FROM upload_queue WHERE (status='pending' OR (status='failed' AND (last_error IS NULL OR (last_error NOT LIKE ?2 AND last_error NOT LIKE ?3)))) AND next_attempt_at <= ?1)",
+                params![now, authorization_pattern, action_pattern],
                 |row| row.get(0),
             )
             .map_err(QueueError::from)
     }
 
+    #[cfg(test)]
     pub fn mark_complete(&self, id: i64, content_hash: &str) -> Result<(), QueueError> {
-        self.connection.lock().execute(
+        self.mark_complete_with_receipt(id, content_hash, None, None, "committed")
+    }
+
+    pub fn mark_complete_with_receipt(
+        &self,
+        id: i64,
+        content_hash: &str,
+        committed_at: Option<i64>,
+        accepted_sequence: Option<u64>,
+        result: &str,
+    ) -> Result<(), QueueError> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let now = chrono::Utc::now().timestamp();
+        let Some(plaintext) = self.queued_plaintext_json(&transaction, id, content_hash)? else {
+            transaction.commit()?;
+            return Ok(());
+        };
+        transaction.execute(
+            "INSERT OR REPLACE INTO upload_receipts(
+               content_hash,kind,acknowledged_at,dataset,scope,subject_id,guild_key,
+               installation_id,first_sequence,last_sequence,captured_at,committed_at,result,
+               receipt_epoch
+             )
+             SELECT content_hash,kind,?3,
+                    json_extract(CAST(?4 AS TEXT),'$.dataset'),
+                    json_extract(CAST(?4 AS TEXT),'$.scope'),
+                    json_extract(CAST(?4 AS TEXT),'$.subjectId'),
+                    json_extract(CAST(?4 AS TEXT),'$.guildKey'),
+                    json_extract(CAST(?4 AS TEXT),'$.installationId'),
+                    COALESCE(json_extract(CAST(?4 AS TEXT),'$.eventRange.firstSequence'),
+                             json_extract(CAST(?4 AS TEXT),'$.exportSequence')),
+                    COALESCE(json_extract(CAST(?4 AS TEXT),'$.eventRange.lastSequence'),?5,
+                             json_extract(CAST(?4 AS TEXT),'$.exportSequence')),
+                    CAST(strftime('%s',json_extract(CAST(?4 AS TEXT),'$.capturedAt')) AS INTEGER),
+                    COALESCE(?6,?3),?7,?8
+             FROM upload_queue
+             WHERE id=?1 AND content_hash=?2 AND status='uploading'",
+            params![
+                id,
+                content_hash,
+                now,
+                plaintext,
+                accepted_sequence.map(|value| value as i64),
+                committed_at,
+                truncate_error(result),
+                RECEIPT_SCHEMA_EPOCH
+            ],
+        )?;
+        transaction.execute(
             "DELETE FROM upload_queue WHERE id=?1 AND content_hash=?2 AND status='uploading'",
             params![id, content_hash],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -292,10 +479,30 @@ impl QueueStore {
     /// plus a database-level state-kind guard so event history cannot be
     /// discarded accidentally or reported as a newly uploaded segment.
     pub fn mark_superseded(&self, id: i64, content_hash: &str) -> Result<(), QueueError> {
-        self.connection.lock().execute(
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let now = chrono::Utc::now().timestamp();
+        transaction.execute(
+            "UPDATE upload_receipts
+             SET acknowledged_at=?3,result='superseded',receipt_epoch=?4
+             WHERE content_hash=?2
+               AND EXISTS(
+                 SELECT 1 FROM upload_queue
+                 WHERE id=?1 AND content_hash=?2 AND status='uploading' AND kind='state'
+               )",
+            params![id, content_hash, now, RECEIPT_SCHEMA_EPOCH],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO upload_receipts(content_hash,kind,acknowledged_at,dataset,guild_key,result,receipt_epoch)
+             SELECT content_hash,kind,?3,dataset,guild_key,'superseded',?4 FROM upload_queue
+             WHERE id=?1 AND content_hash=?2 AND status='uploading' AND kind='state'",
+            params![id, content_hash, now, RECEIPT_SCHEMA_EPOCH],
+        )?;
+        transaction.execute(
             "DELETE FROM upload_queue WHERE id=?1 AND content_hash=?2 AND status='uploading' AND kind='state'",
             params![id, content_hash],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -326,7 +533,7 @@ impl QueueStore {
         let now = chrono::Utc::now().timestamp();
         self.connection.lock().execute(
             "UPDATE upload_queue SET status='failed',attempts=attempts+1,next_attempt_at=?3,last_error=?4,updated_at=?5 WHERE id=?1 AND content_hash=?2 AND status='uploading'",
-            params![id, content_hash, NEVER_RETRY_AT, format_authorization_error(error), now],
+            params![id, content_hash, NEVER_RETRY_AT, format_action_required_error(error), now],
         )?;
         Ok(())
     }
@@ -338,6 +545,7 @@ impl QueueStore {
         let now = chrono::Utc::now().timestamp();
         let safe_error = truncate_error(error);
         let stored_error = format_authorization_error(&safe_error);
+        let action_pattern = format!("{ACTION_REQUIRED_PREFIX}%");
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         transaction.execute(
@@ -345,8 +553,9 @@ impl QueueStore {
             params![AUTHORIZATION_REQUIRED_META, safe_error],
         )?;
         transaction.execute(
-            "UPDATE upload_queue SET status='failed',next_attempt_at=?1,last_error=?2,updated_at=?3",
-            params![NEVER_RETRY_AT, stored_error, now],
+            "UPDATE upload_queue SET status='failed',next_attempt_at=?1,last_error=?2,updated_at=?3
+             WHERE last_error IS NULL OR last_error NOT LIKE ?4",
+            params![NEVER_RETRY_AT, stored_error, now, action_pattern],
         )?;
         transaction.commit()?;
         Ok(())
@@ -398,8 +607,8 @@ impl QueueStore {
     pub fn summary(&self) -> Result<QueueSummary, QueueError> {
         let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
         self.connection.lock().query_row(
-            "SELECT COALESCE(SUM(status='pending'),0),COALESCE(SUM(status='uploading'),0),COALESCE(SUM(status='failed' AND (last_error IS NULL OR last_error NOT LIKE ?1)),0),COALESCE(SUM(status='failed' AND last_error LIKE ?1),0),COALESCE(SUM(length(nonce)+length(ciphertext)),0),EXISTS(SELECT 1 FROM vault_meta WHERE key=?2) FROM upload_queue",
-            params![authorization_pattern, AUTHORIZATION_REQUIRED_META], |row| Ok(QueueSummary { pending: row.get(0)?, uploading: row.get(1)?, failed: row.get(2)?, action_required: row.get(3)?, bytes_encrypted: row.get(4)?, authorization_required: row.get(5)? }))
+            "SELECT COALESCE(SUM(status='pending'),0),COALESCE(SUM(status='uploading'),0),COALESCE(SUM(status='failed' AND (last_error IS NULL OR (last_error NOT LIKE ?1 AND last_error NOT LIKE ?2))),0),COALESCE(SUM(status='failed' AND (last_error LIKE ?1 OR last_error LIKE ?2)),0),COALESCE(SUM(length(nonce)+length(ciphertext)),0),EXISTS(SELECT 1 FROM vault_meta WHERE key=?3) FROM upload_queue",
+            params![authorization_pattern, format!("{ACTION_REQUIRED_PREFIX}%"), AUTHORIZATION_REQUIRED_META], |row| Ok(QueueSummary { pending: row.get(0)?, uploading: row.get(1)?, failed: row.get(2)?, action_required: row.get(3)?, bytes_encrypted: row.get(4)?, authorization_required: row.get(5)? }))
             .map_err(QueueError::from)
     }
 
@@ -407,6 +616,7 @@ impl QueueStore {
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         transaction.execute("DELETE FROM upload_queue", [])?;
+        transaction.execute("DELETE FROM upload_receipts", [])?;
         transaction.execute(
             "DELETE FROM vault_meta WHERE key=?1",
             [AUTHORIZATION_REQUIRED_META],
@@ -467,6 +677,75 @@ impl QueueStore {
         self.connection.lock().execute("INSERT INTO vault_meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value])?;
         Ok(())
     }
+
+    fn has_encrypted_material(&self) -> Result<bool, QueueError> {
+        self.connection
+            .lock()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM upload_queue UNION ALL SELECT 1 FROM secure_meta)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(QueueError::from)
+    }
+
+    fn has_vault_history(&self) -> Result<bool, QueueError> {
+        if self.has_encrypted_material()? {
+            return Ok(true);
+        }
+        self.connection
+            .lock()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM upload_receipts)
+                        OR EXISTS(SELECT 1 FROM vault_meta WHERE key=?1)",
+                [VAULT_INITIALIZED_META],
+                |row| row.get(0),
+            )
+            .map_err(QueueError::from)
+    }
+
+    fn verify_key_for_existing_material(&self, key: &[u8; 32]) -> Result<(), QueueError> {
+        let encrypted: Option<(Vec<u8>, Vec<u8>)> = self
+            .connection
+            .lock()
+            .query_row(
+                "SELECT nonce,ciphertext FROM upload_queue
+                 UNION ALL SELECT nonce,ciphertext FROM secure_meta LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((mut nonce, ciphertext)) = encrypted {
+            nonce.extend_from_slice(&ciphertext);
+            decrypt_bytes(key, &nonce).map_err(|_| QueueError::InvalidCredential)?;
+        }
+        Ok(())
+    }
+
+    fn queued_plaintext_json(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        id: i64,
+        content_hash: &str,
+    ) -> Result<Option<String>, QueueError> {
+        let encrypted: Option<(Vec<u8>, Vec<u8>)> = transaction
+            .query_row(
+                "SELECT nonce,ciphertext FROM upload_queue
+                 WHERE id=?1 AND content_hash=?2 AND status='uploading'",
+                params![id, content_hash],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((mut nonce, ciphertext)) = encrypted else {
+            return Ok(None);
+        };
+        nonce.extend_from_slice(&ciphertext);
+        let key_guard = self.key.lock();
+        let key = key_guard.as_ref().ok_or(QueueError::Locked)?;
+        String::from_utf8(decrypt_bytes(key, &nonce)?)
+            .map(Some)
+            .map_err(|_| QueueError::Encryption)
+    }
 }
 
 fn encrypt_bytes(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, QueueError> {
@@ -504,6 +783,51 @@ fn format_authorization_error(value: &str) -> String {
     format!("{AUTHORIZATION_REQUIRED_PREFIX}{}", truncate_error(value))
 }
 
+fn format_action_required_error(value: &str) -> String {
+    format!("{ACTION_REQUIRED_PREFIX}{}", truncate_error(value))
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    declaration: &str,
+) -> Result<(), QueueError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let present = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|candidate| candidate == column);
+    if !present {
+        connection.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {declaration}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn load_coalesced_envelope(
+    connection: &Connection,
+    key: &[u8; 32],
+    coalesce_key: &str,
+) -> Result<Option<UploadEnvelope>, QueueError> {
+    let encrypted: Option<(Vec<u8>, Vec<u8>)> = connection
+        .query_row(
+            "SELECT nonce,ciphertext FROM upload_queue WHERE coalesce_key=?1",
+            [coalesce_key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((mut nonce, ciphertext)) = encrypted else {
+        return Ok(None);
+    };
+    nonce.extend_from_slice(&ciphertext);
+    let plaintext = decrypt_bytes(key, &nonce)?;
+    Ok(Some(serde_json::from_slice(&plaintext)?))
+}
+
 fn migrate_legacy_authorization_failures(connection: &Connection) -> Result<(), QueueError> {
     let authorization_pattern = format!("{AUTHORIZATION_REQUIRED_PREFIX}%");
     let legacy_error: Option<String> = connection
@@ -529,6 +853,74 @@ fn migrate_legacy_authorization_failures(connection: &Connection) -> Result<(), 
     Ok(())
 }
 
+fn reconcile_dataset_rows(connection: &Connection) -> Result<(), QueueError> {
+    let authorization_error: Option<String> = connection
+        .query_row(
+            "SELECT value FROM vault_meta WHERE key=?1",
+            [AUTHORIZATION_REQUIRED_META],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let rows = {
+        let mut statement =
+            connection.prepare("SELECT id,dataset,kind,last_error FROM upload_queue")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let now = chrono::Utc::now().timestamp();
+    for (id, dataset, kind, last_error) in rows {
+        let valid = match kind.as_str() {
+            "state" => registry::is_bounded_state_name(&dataset),
+            "events" => registry::is_bounded_event_dataset_name(&dataset),
+            _ => false,
+        };
+        let legacy_unregistered_error =
+            format_action_required_error(&format!("raw retained; unregistered dataset {dataset}"));
+        if valid && last_error.as_deref() == Some(legacy_unregistered_error.as_str()) {
+            match &authorization_error {
+                Some(error) => {
+                    connection.execute(
+                        "UPDATE upload_queue
+                         SET status='failed',attempts=0,next_attempt_at=?2,last_error=?3,updated_at=?4
+                         WHERE id=?1",
+                        params![id, NEVER_RETRY_AT, format_authorization_error(error), now],
+                    )?;
+                }
+                None => {
+                    connection.execute(
+                        "UPDATE upload_queue
+                         SET status='pending',attempts=0,next_attempt_at=0,last_error=NULL,updated_at=?2
+                         WHERE id=?1",
+                        params![id, now],
+                    )?;
+                }
+            }
+        } else if !valid {
+            connection.execute(
+                "UPDATE upload_queue
+                 SET status='failed',next_attempt_at=?2,last_error=?3,updated_at=?4
+                 WHERE id=?1",
+                params![
+                    id,
+                    NEVER_RETRY_AT,
+                    format_action_required_error(&format!("invalid dataset name/kind {dataset}")),
+                    now
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,24 +930,38 @@ mod tests {
 
     fn envelope(sequence: u64, value: &str, kind: DatasetKind) -> UploadEnvelope {
         let payload = serde_json::json!({"value":value});
+        let is_event = kind == DatasetKind::Events;
         UploadEnvelope {
             schema_version: 1,
-            dataset: "roster".into(),
+            dataset: if is_event {
+                "events.guild_chat".into()
+            } else {
+                "guild".into()
+            },
             kind,
             scope: "guild".into(),
-            subject_id: "guild".into(),
+            subject_id: if is_event {
+                format!("AbCdEf0123_-xYz9:Player-1-ABCDEF01:{sequence}")
+            } else {
+                "main".into()
+            },
             guild_key: GuildKey::Main,
             guild: crate::guild::canonical(GuildKey::Main),
             source_character: SourceCharacter {
-                guid: "Player-1".into(),
+                guid: "Player-1-ABCDEF01".into(),
                 name: "Aria".into(),
                 realm: "Dalaran".into(),
                 realm_slug: "dalaran".into(),
             },
-            installation_id: "install-1".into(),
+            installation_id: "AbCdEf0123_-xYz9".into(),
             protocol_version: "1.0".into(),
             export_sequence: sequence,
+            event_range: is_event.then_some(EventRange {
+                first_sequence: sequence,
+                last_sequence: sequence,
+            }),
             captured_at: Utc::now(),
+            persisted_at: Utc::now().timestamp(),
             coverage: Coverage {
                 status: CoverageStatus::Complete,
                 reason_code: None,
@@ -592,6 +998,108 @@ mod tests {
             .query_row("SELECT ciphertext FROM upload_queue", [], |row| row.get(0))
             .unwrap();
         assert!(!String::from_utf8_lossy(&ciphertext).contains("new"));
+    }
+
+    #[test]
+    fn older_state_cannot_replace_a_fresher_coalesced_capture() {
+        let store = store();
+        let newer = envelope(5, "newer", DatasetKind::State);
+        let mut older = envelope(4, "older", DatasetKind::State);
+        older.captured_at = newer.captured_at + chrono::Duration::minutes(1);
+        assert!(store.enqueue(&newer).unwrap());
+        assert!(!store.enqueue(&older).unwrap());
+        let ready = store.next_ready(1).unwrap();
+        assert_eq!(ready[0].envelope.export_sequence, 5);
+        assert_eq!(ready[0].envelope.payload["value"], "newer");
+    }
+
+    #[test]
+    fn newer_coverage_observation_can_replace_state_at_the_same_sequence() {
+        let store = store();
+        let current = envelope(5, "same-payload", DatasetKind::State);
+        let mut coverage_update = current.clone();
+        coverage_update.coverage.status = CoverageStatus::InteractionRequired;
+        coverage_update.coverage.reason_code = Some("open_guild_roster".into());
+        coverage_update.coverage.observed_at += chrono::Duration::minutes(1);
+        assert!(store.enqueue(&current).unwrap());
+        assert!(store.enqueue(&coverage_update).unwrap());
+        let ready = store.next_ready(1).unwrap();
+        assert!(matches!(
+            ready[0].envelope.coverage.status,
+            CoverageStatus::InteractionRequired
+        ));
+    }
+
+    #[test]
+    fn bounded_future_state_and_events_are_encrypted_and_ready_for_raw_upload() {
+        let store = store();
+        let mut future = envelope(1, "future", DatasetKind::State);
+        future.dataset = "future_metric".into();
+        assert!(store.enqueue(&future).unwrap());
+        let mut future_event = envelope(2, "future event", DatasetKind::Events);
+        future_event.dataset = "events.future_stream".into();
+        assert!(store.enqueue(&future_event).unwrap());
+        let summary = store.summary().unwrap();
+        assert_eq!(summary.pending, 2);
+        assert_eq!(summary.action_required, 0);
+        let ciphertexts = {
+            let connection = store.connection.lock();
+            let mut statement = connection
+                .prepare("SELECT ciphertext FROM upload_queue ORDER BY id")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<Vec<u8>>, _>>()
+                .unwrap()
+        };
+        assert!(ciphertexts
+            .iter()
+            .all(|value| !String::from_utf8_lossy(value).contains("future")));
+        let ready = store.next_ready(10).unwrap();
+        assert_eq!(ready.len(), 2);
+        assert_eq!(ready[0].envelope.dataset, "future_metric");
+        assert_eq!(ready[1].envelope.dataset, "events.future_stream");
+    }
+
+    #[test]
+    fn legacy_unregistered_quarantine_is_released_for_raw_upload_on_upgrade() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        {
+            let store = QueueStore::open(&path).unwrap();
+            *store.key.lock() = Some(Zeroizing::new([7_u8; 32]));
+            let mut future = envelope(1, "future", DatasetKind::State);
+            future.dataset = "future_metric".into();
+            assert!(store.enqueue(&future).unwrap());
+            store
+                .connection
+                .lock()
+                .execute(
+                    "UPDATE upload_queue SET status='failed',next_attempt_at=?1,last_error=?2",
+                    params![
+                        NEVER_RETRY_AT,
+                        format_action_required_error(
+                            "raw retained; unregistered dataset future_metric"
+                        )
+                    ],
+                )
+                .unwrap();
+        }
+        let reopened = QueueStore::open(&path).unwrap();
+        let summary = reopened.summary().unwrap();
+        assert_eq!(summary.pending, 1);
+        assert_eq!(summary.action_required, 0);
+    }
+
+    #[test]
+    fn syntactically_invalid_dataset_names_remain_quarantined() {
+        let store = store();
+        let mut invalid = envelope(1, "invalid", DatasetKind::State);
+        invalid.dataset = "events.wrong-kind".into();
+        assert!(store.enqueue(&invalid).unwrap());
+        assert_eq!(store.summary().unwrap().action_required, 1);
+        assert!(store.next_ready(10).unwrap().is_empty());
     }
 
     #[test]
@@ -708,7 +1216,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(gap_error.starts_with(AUTHORIZATION_REQUIRED_PREFIX));
+        assert!(gap_error.starts_with(ACTION_REQUIRED_PREFIX));
         assert!(gap_error.contains("event coverage gap requires review"));
         let superseded_count: i64 = connection
             .query_row(
@@ -748,6 +1256,166 @@ mod tests {
     }
 
     #[test]
+    fn acknowledged_envelopes_are_not_requeued_after_success_or_supersession() {
+        let store = store();
+        let state = envelope(1, "state", DatasetKind::State);
+        let mut event = envelope(2, "event", DatasetKind::Events);
+        event.subject_id = "event-2".into();
+
+        assert!(store.enqueue(&state).unwrap());
+        assert!(store.enqueue(&event).unwrap());
+        let claimed = store.next_ready(10).unwrap();
+        for upload in &claimed {
+            store
+                .mark_complete(upload.id, &upload.content_hash)
+                .unwrap();
+        }
+        assert_eq!(store.summary().unwrap().pending, 0);
+        assert!(!store.enqueue(&state).unwrap());
+        assert!(!store.enqueue(&event).unwrap());
+
+        let newer = envelope(3, "superseded", DatasetKind::State);
+        assert!(store.enqueue(&newer).unwrap());
+        let superseded = store.next_ready(1).unwrap().remove(0);
+        store
+            .mark_superseded(superseded.id, &superseded.content_hash)
+            .unwrap();
+        assert!(!store.enqueue(&newer).unwrap());
+    }
+
+    #[test]
+    fn legacy_state_receipt_requeues_once_for_the_current_projection_epoch() {
+        let store = store();
+        let state = envelope(7, "backfill", DatasetKind::State);
+        assert!(store.enqueue(&state).unwrap());
+        let claimed = store.next_ready(1).unwrap().remove(0);
+        store
+            .mark_complete_with_receipt(
+                claimed.id,
+                &claimed.content_hash,
+                Some(Utc::now().timestamp()),
+                Some(7),
+                "committed",
+            )
+            .unwrap();
+        store
+            .connection
+            .lock()
+            .execute(
+                "UPDATE upload_receipts SET receipt_epoch=1 WHERE content_hash=?1",
+                [&claimed.content_hash],
+            )
+            .unwrap();
+
+        assert!(store.enqueue(&state).unwrap());
+        let replay = store.next_ready(1).unwrap().remove(0);
+        store
+            .mark_complete_with_receipt(
+                replay.id,
+                &replay.content_hash,
+                Some(Utc::now().timestamp()),
+                Some(7),
+                "already_committed",
+            )
+            .unwrap();
+        assert!(!store.enqueue(&state).unwrap());
+    }
+
+    #[test]
+    fn legacy_state_receipt_supersession_also_advances_the_projection_epoch() {
+        let store = store();
+        let state = envelope(7, "backfill-superseded", DatasetKind::State);
+        assert!(store.enqueue(&state).unwrap());
+        let claimed = store.next_ready(1).unwrap().remove(0);
+        store
+            .mark_complete_with_receipt(
+                claimed.id,
+                &claimed.content_hash,
+                Some(Utc::now().timestamp()),
+                Some(7),
+                "committed",
+            )
+            .unwrap();
+        store
+            .connection
+            .lock()
+            .execute(
+                "UPDATE upload_receipts SET receipt_epoch=1 WHERE content_hash=?1",
+                [&claimed.content_hash],
+            )
+            .unwrap();
+        assert!(store.enqueue(&state).unwrap());
+        let replay = store.next_ready(1).unwrap().remove(0);
+        store
+            .mark_superseded(replay.id, &replay.content_hash)
+            .unwrap();
+        assert!(!store.enqueue(&state).unwrap());
+        let epoch: i64 = store
+            .connection
+            .lock()
+            .query_row(
+                "SELECT receipt_epoch FROM upload_receipts WHERE content_hash=?1",
+                [&claimed.content_hash],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(epoch, RECEIPT_SCHEMA_EPOCH);
+    }
+
+    #[test]
+    fn rich_receipt_records_dataset_identity_and_server_result() {
+        let store = store();
+        let state = envelope(9, "receipt", DatasetKind::State);
+        assert!(store.enqueue(&state).unwrap());
+        let claimed = store.next_ready(1).unwrap().remove(0);
+        let committed_at = Utc::now().timestamp();
+        store
+            .mark_complete_with_receipt(
+                claimed.id,
+                &claimed.content_hash,
+                Some(committed_at),
+                Some(9),
+                "committed",
+            )
+            .unwrap();
+        let receipt: (String, String, String, String, i64, i64, String, i64) = store
+            .connection
+            .lock()
+            .query_row(
+                "SELECT dataset,scope,subject_id,installation_id,first_sequence,
+                        committed_at,result,receipt_epoch
+                 FROM upload_receipts WHERE content_hash=?1",
+                [&claimed.content_hash],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            receipt,
+            (
+                "guild".into(),
+                "guild".into(),
+                "main".into(),
+                "AbCdEf0123_-xYz9".into(),
+                9,
+                committed_at,
+                "committed".into(),
+                RECEIPT_SCHEMA_EPOCH,
+            )
+        );
+    }
+
+    #[test]
     fn passphrase_vault_rejects_a_different_passphrase() {
         let directory = tempdir().unwrap().keep();
         let path = directory.join("queue.sqlite3");
@@ -770,6 +1438,20 @@ mod tests {
             reopened.load_secure("test").unwrap().unwrap().as_slice(),
             b"secret"
         );
+    }
+
+    #[test]
+    fn vault_mode_mismatch_never_rekeys_existing_ciphertext() {
+        let store = store();
+        assert!(store
+            .enqueue(&envelope(1, "preserved", DatasetKind::State))
+            .unwrap());
+        *store.key.lock() = None;
+        assert!(matches!(
+            store.unlock_with_passphrase("a different secure passphrase"),
+            Err(QueueError::VaultModeMismatch)
+        ));
+        assert_eq!(store.summary().unwrap().pending, 1);
     }
 
     #[test]

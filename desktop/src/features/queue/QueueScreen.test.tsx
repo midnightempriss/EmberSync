@@ -17,6 +17,8 @@ const status: DesktopStatus = {
   connection: "paired",
   watcherRunning: true,
   discoveredFiles: 1,
+  autoSyncIntervalMinutes: 15,
+  nextAutoSyncAt: "2026-07-23T04:15:00Z",
   guilds: [],
   queue: {
     pending: 0,
@@ -41,6 +43,8 @@ describe("QueueScreen authorization and vault status", () => {
     expect(screen.getByText("Needs attention").nextElementSibling).toHaveTextContent("53");
     expect(screen.getByText("Battle.net verification is required")).toBeVisible();
     expect(screen.getByText("Local payload encryption is active")).toBeVisible();
+    expect(screen.getByText("Automatic sync every 15 minutes")).toBeVisible();
+    expect(screen.getByText(/continues from the system tray/i)).toBeVisible();
     expect(screen.queryByText("Unlock a passphrase vault")).not.toBeInTheDocument();
   });
 

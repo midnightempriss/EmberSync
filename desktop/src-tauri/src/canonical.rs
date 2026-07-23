@@ -47,4 +47,15 @@ mod tests {
             "{\"numbers\":[0,1e-7,0.000001,1000000000000000,10000000000000000,100000000000000000000,1e+21,0.03921568766236305,83.33333587646484,280.0625],\"😀\":\"astral\",\"�\":\"replacement\"}"
         );
     }
+
+    #[test]
+    fn canonical_envelope_hash_matches_the_protocol_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol/fixtures/canonical-envelope-v1.json"
+        ))
+        .unwrap();
+        let expected =
+            include_str!("../../../protocol/fixtures/canonical-envelope-v1.sha256").trim();
+        assert_eq!(sha256_hex(&fixture), expected);
+    }
 }

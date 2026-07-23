@@ -8,8 +8,8 @@
       "type": "object",
       "required": ["firstSequence", "lastSequence"],
       "properties": {
-        "firstSequence": { "type": "integer", "minimum": 0 },
-        "lastSequence": { "type": "integer", "minimum": 0 }
+        "firstSequence": { "type": "integer", "minimum": 1 },
+        "lastSequence": { "type": "integer", "minimum": 1 }
       },
       "additionalProperties": true
     },
@@ -17,7 +17,7 @@
       "type": "object",
       "required": ["dataset", "kind", "scope", "subjectId", "coverage", "payloadHash", "envelopeHash", "compressedBytes", "expandedBytes"],
       "properties": {
-        "dataset": { "$ref": "common-v1.schema.json#/$defs/datasetName" },
+        "dataset": { "$ref": "common-v1.schema.json#/$defs/uploadDatasetName" },
         "kind": { "enum": ["state", "events"] },
         "scope": { "$ref": "common-v1.schema.json#/$defs/datasetScope" },
         "subjectId": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -30,22 +30,30 @@
       },
       "allOf": [
         {
-          "if": { "properties": { "dataset": { "$ref": "common-v1.schema.json#/$defs/eventDatasetName" } } },
+          "if": { "properties": { "kind": { "const": "events" } } },
           "then": {
             "required": ["eventRange"],
             "properties": {
               "kind": { "const": "events" },
-              "subjectId": { "pattern": "^[A-Za-z0-9_-]{16,128}:Player-[0-9]+-[0-9A-Fa-f]+:[0-9]+$" }
+              "dataset": { "$ref": "common-v1.schema.json#/$defs/boundedEventDatasetName" },
+              "scope": { "const": "guild" },
+              "subjectId": { "pattern": "^[A-Za-z0-9_-]{16}:Player-[0-9]+-[0-9A-Fa-f]+:[1-9][0-9]*$" }
             }
           },
-          "else": { "properties": { "kind": { "const": "state" } } }
+          "else": {
+            "properties": {
+              "kind": { "const": "state" },
+              "dataset": { "$ref": "common-v1.schema.json#/$defs/boundedStateDatasetName" },
+              "eventRange": false
+            }
+          }
         }
       ],
       "additionalProperties": true
     },
     "manifest": {
       "type": "object",
-      "required": ["schemaVersion", "protocolVersion", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "segments"],
+      "required": ["schemaVersion", "protocolVersion", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "persistedAt", "queuedAt", "segments"],
       "properties": {
         "schemaVersion": { "const": 1 },
         "protocolVersion": { "const": "1.0" },
@@ -53,8 +61,10 @@
         "guild": { "$ref": "common-v1.schema.json#/$defs/canonicalGuild" },
         "sourceCharacter": { "$ref": "common-v1.schema.json#/$defs/sourceCharacter" },
         "installationId": { "$ref": "common-v1.schema.json#/$defs/installationId" },
-        "exportSequence": { "type": "integer", "minimum": 0 },
+        "exportSequence": { "type": "integer", "minimum": 1 },
         "capturedAt": { "$ref": "common-v1.schema.json#/$defs/utcInstant" },
+        "persistedAt": { "type": "integer", "minimum": 1 },
+        "queuedAt": { "type": "integer", "minimum": 1 },
         "segments": {
           "type": "array",
           "minItems": 1,
@@ -104,7 +114,7 @@
       "properties": {
         "status": { "enum": ["committed", "already_committed"] },
         "committedAt": { "$ref": "common-v1.schema.json#/$defs/utcInstant" },
-        "acceptedSequence": { "type": "integer", "minimum": 0 }
+        "acceptedSequence": { "type": "integer", "minimum": 1 }
       },
       "additionalProperties": true
     }

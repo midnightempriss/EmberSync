@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "state": [
+    { "name": "auction_house", "scopes": ["character"] },
+    { "name": "calendar", "scopes": ["guild"] },
+    { "name": "character", "scopes": ["character"] },
+    { "name": "collections", "scopes": ["account"] },
+    { "name": "crafting", "scopes": ["character"] },
+    { "name": "damage_meter", "scopes": ["character"] },
+    { "name": "guild", "scopes": ["guild"] },
+    { "name": "guild_bank", "scopes": ["guild"] },
+    { "name": "housing", "scopes": ["character"] },
+    { "name": "inventory", "scopes": ["character"] },
+    { "name": "mail_metadata", "scopes": ["character"] },
+    { "name": "mythic_plus", "scopes": ["character"] },
+    { "name": "professions", "scopes": ["character"] },
+    { "name": "progression", "scopes": ["character"] },
+    { "name": "pvp", "scopes": ["character"] },
+    { "name": "world_quests", "scopes": ["character"] }
+  ],
+  "events": [
+    { "name": "events.guild_chat", "scopes": ["guild"] },
+    { "name": "events.officer_chat", "scopes": ["guild"] },
+    { "name": "events.guild", "scopes": ["guild"] },
+    { "name": "events.guild_bank", "scopes": ["guild"] },
+    { "name": "events.guild_presence", "scopes": ["guild"] },
+    { "name": "events.neighborhood_initiative", "scopes": ["guild"] }
+  ]
+}

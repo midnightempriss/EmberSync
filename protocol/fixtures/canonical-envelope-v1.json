@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": "1.0",
+  "dataset": "guild",
+  "kind": "state",
+  "scope": "guild",
+  "subjectId": "main",
+  "guildKey": "main",
+  "guild": {
+    "key": "main",
+    "name": "Raining Embers",
+    "slug": "raining-embers",
+    "foundingRealm": "Dalaran",
+    "realmSlug": "dalaran",
+    "region": "US",
+    "profileUrl": "https://worldofwarcraft.blizzard.com/en-us/guild/us/dalaran/raining-embers"
+  },
+  "sourceCharacter": {
+    "guid": "Player-3683-0ABCDEF0",
+    "name": "Ember",
+    "realm": "Dalaran",
+    "realmSlug": "dalaran"
+  },
+  "installationId": "AbCdEf0123_-xYz9",
+  "exportSequence": 7,
+  "capturedAt": "2026-07-23T18:00:00Z",
+  "persistedAt": 1784829900,
+  "coverage": {
+    "status": "complete",
+    "observedAt": "2026-07-23T18:00:00Z",
+    "recordCount": 2
+  },
+  "permissionEvidence": {
+    "observedAt": "2026-07-23T18:00:00Z",
+    "guildRankIndex": 2
+  },
+  "payloadHash": "b95c468247e982a0977c2df0ce353760a951fd0a5b640b100a8babc443be9d4b",
+  "payload": {
+    "members": 2,
+    "motd": "Welcome, Embers!"
+  }
+}

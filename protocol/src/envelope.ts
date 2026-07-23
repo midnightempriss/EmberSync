@@ -11,6 +11,8 @@ import type {
 } from "./types.js";
 import { ALLOWED_GUILDS } from "./guilds.js";
 import { PROTOCOL_VERSION, SCHEMA_VERSION } from "./version.js";
+import { normalizeInstallationIdV1 } from "./installation.js";
+import { isStateDatasetNameV1 } from "./registry.js";
 
 function unixSecondsToUtc(value: number): string {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -68,7 +70,14 @@ function normalizeAddonPermissionEvidenceV1(
 export async function createDatasetEnvelopeV1(
   source: AddonDatasetEnvelopeV1,
   kind: DatasetKind,
+  persistedAt: number = source.capturedAt,
 ): Promise<DatasetEnvelopeV1> {
+  if (kind !== "state" || !isStateDatasetNameV1(source.dataset)) {
+    throw new TypeError("Only registered state datasets can become upload envelopes");
+  }
+  if (!Number.isSafeInteger(persistedAt) || persistedAt < 1) {
+    throw new TypeError("persistedAt must be positive Unix seconds");
+  }
   const payloadHash = await canonicalJsonSha256(source.payload);
   const guild = ALLOWED_GUILDS[source.guildKey];
   if (
@@ -103,9 +112,10 @@ export async function createDatasetEnvelopeV1(
       realm: source.sourceCharacter.realm,
       realmSlug: playerRealmSlug,
     },
-    installationId: source.installationId,
+    installationId: normalizeInstallationIdV1(source.installationId),
     exportSequence: source.sequence,
     capturedAt,
+    persistedAt,
     coverage,
     permissionEvidence: normalizeAddonPermissionEvidenceV1(
       source.permissionEvidence,

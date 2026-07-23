@@ -21,6 +21,15 @@ export function SettingsScreen({ status, onRefresh }: { status: DesktopStatus; o
   const [updateMessage, setUpdateMessage] = useState("Updates are verified with EmberSync’s release signing key before installation.");
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   useEffect(() => { void getStartAtLogin().then(setStartup); }, []);
+  useEffect(() => {
+    if (status.connection === "paired") {
+      setPairing(null);
+      setConnectionMessage((current) => current ?? {
+        error: false,
+        text: "This device is now connected to rainingembers.org.",
+      });
+    }
+  }, [status.connection]);
   const saveRoot = async (path: string) => {
     const selectedPath = path.trim();
     if (!selectedPath) return;

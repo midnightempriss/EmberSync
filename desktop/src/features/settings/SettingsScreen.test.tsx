@@ -23,6 +23,7 @@ const status: DesktopStatus = {
   connection: "unpaired",
   watcherRunning: true,
   discoveredFiles: 0,
+  autoSyncIntervalMinutes: 15,
   guilds: [],
   queue: { pending: 0, uploading: 0, failed: 0, bytesEncrypted: 0 },
   roots: ["G:\\Battle.net\\World of Warcraft\\_retail_\\WTF"],

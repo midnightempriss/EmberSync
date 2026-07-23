@@ -16,41 +16,57 @@ local GuildLock = {
 
 local function getGuildForName(name)
     local normalized = Util.NormalizeGuildName(name)
+    if not normalized then
+        return nil, "guild_name_unreadable"
+    end
     for _, guild in pairs(Constants.GUILDS) do
         if normalized == guild.normalizedName then
-            return guild
+            return guild, nil
         end
     end
-    return nil
+    return nil, "wrong_guild"
 end
 
 function GuildLock:Resolve(snapshot)
     snapshot = snapshot or {}
     local finalAttempt = snapshot.finalAttempt == true
 
-    if type(snapshot.region) ~= "number" then
+    local region = Util.SafeNumber(snapshot.region)
+    if not region then
         return "verifying", "region_pending"
     end
-    if snapshot.region ~= Constants.REGION_US then
+    if region ~= Constants.REGION_US then
         return "denied", "wrong_region"
     end
 
-    if snapshot.inGuild == false and not snapshot.worldReady and not finalAttempt then
+    local inGuild = Util.SafeBoolean(snapshot.inGuild)
+    if inGuild == false and not snapshot.worldReady and not finalAttempt then
         return "verifying", "guild_info_pending"
     end
-    if snapshot.inGuild == false then
+    if inGuild == false then
         return "denied", "not_in_guild"
     end
-    if not snapshot.guildName or snapshot.guildName == "" then
+    if inGuild ~= true then
         if finalAttempt then
             return "denied", "verification_incomplete"
         end
         return "verifying", "guild_info_pending"
     end
 
-    local guild = getGuildForName(snapshot.guildName)
+    local normalizedGuildName = Util.NormalizeGuildName(snapshot.guildName)
+    if not normalizedGuildName then
+        if finalAttempt then
+            return "denied", "verification_incomplete"
+        end
+        return "verifying", "guild_info_pending"
+    end
+
+    local guild, guildReason = getGuildForName(snapshot.guildName)
     if not guild then
-        return "denied", "wrong_guild"
+        if guildReason == "guild_name_unreadable" and not finalAttempt then
+            return "verifying", guildReason
+        end
+        return "denied", guildReason
     end
 
     local normalizedGuildRealm = Util.NormalizeRealm(snapshot.guildRealm)
@@ -80,19 +96,37 @@ function GuildLock:Resolve(snapshot)
     if snapshot.clubApiSupported == false then
         return "denied", "club_api_unavailable"
     end
-    if not snapshot.clubId or not snapshot.clubInfo or not snapshot.selfMember then
+    local clubId = Util.SafeNumber(snapshot.clubId)
+    if not clubId or Util.IsSecret(snapshot.clubInfo) or type(snapshot.clubInfo) ~= "table"
+        or Util.IsSecret(snapshot.selfMember) or type(snapshot.selfMember) ~= "table" then
         if finalAttempt then
             return "denied", "club_membership_missing"
         end
         return "verifying", "club_membership_pending"
     end
 
-    if Util.NormalizeGuildName(snapshot.clubInfo.name) ~= guild.normalizedName then
+    local normalizedClubName = Util.NormalizeGuildName(snapshot.clubInfo.name)
+    if not normalizedClubName then
+        if finalAttempt then
+            return "denied", "verification_incomplete"
+        end
+        return "verifying", "club_name_unreadable"
+    end
+    if normalizedClubName ~= guild.normalizedName then
         return "denied", "club_name_mismatch"
     end
-    if snapshot.expectedGuildClubType ~= nil
-        and snapshot.clubInfo.clubType ~= snapshot.expectedGuildClubType then
-        return "denied", "club_type_mismatch"
+    local expectedGuildClubType = Util.SafeNumber(snapshot.expectedGuildClubType)
+    if expectedGuildClubType ~= nil then
+        local clubType = Util.SafeNumber(snapshot.clubInfo.clubType)
+        if clubType == nil then
+            if finalAttempt then
+                return "denied", "verification_incomplete"
+            end
+            return "verifying", "club_type_pending"
+        end
+        if clubType ~= expectedGuildClubType then
+            return "denied", "club_type_mismatch"
+        end
     end
 
     local state = guild.key == "main" and "authorized_main" or "authorized_alt"
@@ -102,10 +136,10 @@ function GuildLock:Resolve(snapshot)
         realm = guild.realm,
         region = guild.region,
         slug = guild.slug,
-        rankName = snapshot.rankName,
-        rankIndex = snapshot.rankIndex,
+        rankName = Util.SafeString(snapshot.rankName, true),
+        rankIndex = Util.SafeNumber(snapshot.rankIndex),
         guildRealmSource = realmSource,
-        clubId = snapshot.clubId,
+        clubId = clubId,
         verifiedAt = Util.Now(),
     }
 end
@@ -156,7 +190,7 @@ function GuildLock:ReadSnapshot(finalAttempt)
     if clubApiSupported then
         local ok, value = pcall(_G.C_Club.GetGuildClubId)
         if ok then
-            clubId = value
+            clubId = Util.SafeNumber(value)
             if clubId ~= nil then
                 self.clubsInitialized = true
                 local infoOk, info = pcall(_G.C_Club.GetClubInfo, clubId)

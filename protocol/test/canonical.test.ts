@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 
 import {
   canonicalJson,
   canonicalJsonSha256,
   sha256HexUtf8,
 } from "../src/index.js";
+
+test("canonical envelope hash matches the cross-language fixture", async () => {
+  const fixtureUrl = new URL("../../fixtures/canonical-envelope-v1.json", import.meta.url);
+  const expectedUrl = new URL("../../fixtures/canonical-envelope-v1.sha256", import.meta.url);
+  const fixture = JSON.parse(await readFile(fixtureUrl, "utf8"));
+  const expected = (await readFile(expectedUrl, "utf8")).trim();
+  assert.equal(await canonicalJsonSha256(fixture), expected);
+});
 
 test("canonical JSON recursively sorts object keys", () => {
   assert.equal(

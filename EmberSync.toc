@@ -2,7 +2,7 @@
 ## Title: EmberSync
 ## Notes: Private game and guild data sync for Raining Embers.
 ## Author: Raining Embers
-## Version: 0.1.2
+## Version: 0.1.4
 ## SavedVariables: EmberSyncDB
 ## IconTexture: Interface\Icons\INV_Elemental_Primal_Fire
 ## AddonCompartmentFunc: EmberSync_OnAddonCompartmentClick
@@ -29,6 +29,7 @@ Collectors\Collections.lua
 Collectors\Professions.lua
 Collectors\Inventory.lua
 Collectors\Progression.lua
+Collectors\WorldQuests.lua
 Collectors\MythicPlus.lua
 Collectors\PvP.lua
 Collectors\Crafting.lua

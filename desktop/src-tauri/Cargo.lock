@@ -1212,7 +1212,7 @@ checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
 name = "embersync-desktop"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "argon2",

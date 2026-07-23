@@ -3,12 +3,15 @@
 1. Update the version in `EmberSync.toc`, `desktop/package.json`,
    `desktop/src-tauri/Cargo.toml`, and `desktop/src-tauri/tauri.conf.json`.
 2. Update `CHANGELOG.md` and run the full local validation matrix.
-3. Package the addon with `scripts/package-addon.ps1`.
-4. Push the exact commit and create a `vMAJOR.MINOR.PATCH` tag.
-5. The release workflow builds native bundles on each operating system, signs
+3. For protocol or projection changes, deploy and verify the backward-compatible
+   website first so the currently installed desktop cannot upload into an
+   older allowlist.
+4. Package the addon with `scripts/package-addon.ps1`.
+5. Push the exact commit and create a `vMAJOR.MINOR.PATCH` tag.
+6. The release workflow builds native bundles on each operating system, signs
    updater artifacts, attaches the addon archive, generates
    `SHA256SUMS.txt`, and publishes the GitHub release.
-6. Populate this checkout's `installer/` directory with
+7. Populate this checkout's `installer/` directory with
    `scripts/fetch-release-artifacts.ps1 -Tag vMAJOR.MINOR.PATCH` and verify the
    checksums.
 

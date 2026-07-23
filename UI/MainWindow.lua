@@ -205,6 +205,16 @@ function MainWindow:GetCoverageText(export)
         local coverage = entry.coverage or {}
         local reason = coverage.reason and (" — " .. tostring(coverage.reason):gsub("_", " ")) or ""
         lines[#lines + 1] = color(entry.key, "ffffffff") .. ": " .. statusLabel(coverage.status) .. reason
+        if type(coverage.opportunity) == "string" and coverage.opportunity ~= "" then
+            local label = coverage.actionNeeded == false and "  Note: " or "  Action: "
+            lines[#lines + 1] = color(label .. coverage.opportunity, "ffb8c4d6")
+        end
+        if coverage.preservedLastGood == true then
+            lines[#lines + 1] = color(
+                "  Last complete data is preserved; this partial observation did not delete it.",
+                "ff52d273"
+            )
+        end
     end
     return table.concat(lines, "\n")
 end

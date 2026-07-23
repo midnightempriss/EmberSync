@@ -37,3 +37,9 @@ raw state snapshots for 90 days, and append-only guild events for one year.
 Sensitive or uncorroborated guild-wide observations are private. Live Blizzard
 data remains authoritative for authentication, membership, ownership,
 leadership, and access decisions.
+
+The leader-only Sync Health surface exposes transport metadata such as dataset
+name, coverage, freshness, trust, and commit/projection state. It never returns
+raw payload values, messages, notes, inventory contents, or encryption keys.
+Bounded future datasets remain encrypted and raw-only until a reviewed
+projection is explicitly registered.

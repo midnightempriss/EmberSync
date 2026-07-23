@@ -15,6 +15,7 @@ const status: DesktopStatus = {
   connection: "unpaired",
   watcherRunning: true,
   discoveredFiles: 1,
+  autoSyncIntervalMinutes: 15,
   guilds: [],
   queue: { pending: 0, uploading: 0, failed: 0, bytesEncrypted: 0 },
   roots: [],

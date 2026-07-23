@@ -1,4 +1,5 @@
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use crate::discovery;
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use std::{
     path::PathBuf,
@@ -33,8 +34,13 @@ impl WatcherService {
         let (event_tx, event_rx) = mpsc::channel();
         let notify_tx = event_tx.clone();
         let mut watcher: RecommendedWatcher =
-            notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                if result.is_ok() {
+            notify::recommended_watcher(move |result: notify::Result<Event>| {
+                if result.is_ok_and(|event| {
+                    event
+                        .paths
+                        .iter()
+                        .any(|path| discovery::is_ember_sync_candidate_file(path))
+                }) {
                     let _ = notify_tx.send(());
                 }
             })?;
@@ -55,6 +61,7 @@ impl WatcherService {
             .name("embersync-watcher".into())
             .spawn(move || {
                 let _watcher = watcher;
+                let mut fingerprints = discovery::saved_variables_fingerprints(&roots);
                 let mut last_scan = Instant::now() - Duration::from_secs(10);
                 let mut event_pending = false;
                 let mut event_at = Instant::now();
@@ -73,7 +80,11 @@ impl WatcherService {
                         && now.duration_since(event_at) >= Duration::from_millis(1500);
                     let polling = now.duration_since(last_scan) >= Duration::from_secs(10);
                     if debounced || polling {
-                        callback();
+                        let next = discovery::saved_variables_fingerprints(&roots);
+                        if next != fingerprints {
+                            fingerprints = next;
+                            callback();
+                        }
                         event_pending = false;
                         last_scan = now;
                     }

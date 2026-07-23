@@ -30,7 +30,7 @@ test("the complete TOC load order initializes without a WoW client", async () =>
   chunks.push(`
     local count = 0
     for _ in pairs(EmberSync.collectors) do count = count + 1 end
-    assert(count == 16, "expected all sixteen collectors")
+    assert(count == 17, "expected all seventeen collectors")
     assert(EmberSync.Bootstrap and EmberSync.Bootstrap.frame, "bootstrap event frame missing")
     assert(EmberSync.Bootstrap.frame.events.ADDON_LOADED)
     assert(EmberSync.Bootstrap.frame.events.PLAYER_LOGOUT)

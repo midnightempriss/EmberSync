@@ -7,9 +7,6 @@ import {
 import { isSha256Hex } from "./canonical.js";
 import {
   COVERAGE_STATUSES,
-  DATASET_NAMES_V1,
-  EVENT_DATASET_NAMES_V1,
-  STATE_DATASET_NAMES_V1,
   type AddonDatasetEnvelopeV1,
   type AddonCoverageV1,
   type AddonEventV1,
@@ -27,6 +24,15 @@ import {
   type SourceCharacterV1,
   type SyncManifestV1,
 } from "./types.js";
+import {
+  datasetAllowsScopeV1,
+  isBoundedRawEventDatasetNameV1,
+  isBoundedRawEventStreamNameV1,
+  isBoundedRawStateDatasetNameV1,
+  isDatasetNameV1,
+  isEventDatasetNameV1,
+  isStateDatasetNameV1,
+} from "./registry.js";
 import { PROTOCOL_VERSION, SCHEMA_VERSION } from "./version.js";
 
 export interface ValidationIssue {
@@ -39,11 +45,9 @@ export type ValidationResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
 
-const DATASET_SET = new Set<string>(DATASET_NAMES_V1);
-const STATE_DATASET_SET = new Set<string>(STATE_DATASET_NAMES_V1);
-const EVENT_DATASET_SET = new Set<string>(EVENT_DATASET_NAMES_V1);
 const COVERAGE_SET = new Set<string>(COVERAGE_STATUSES);
-const INSTALLATION_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u;
+const INSTALLATION_ID_PATTERN = /^[A-Za-z0-9_-]{16}$/u;
+const LEGACY_INSTALLATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/u;
 const CHARACTER_GUID_PATTERN = /^Player-[0-9]+-[0-9A-Fa-f]+$/u;
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const UTC_INSTANT_PATTERN =
@@ -99,6 +103,10 @@ function isSafeNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+function isSafePositiveInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1;
+}
+
 function isUtcInstant(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -147,6 +155,86 @@ export function isJsonValue(
   };
 
   return visit(value, 0);
+}
+
+function validateEventBatchPayload(
+  value: unknown,
+  firstSequence: number,
+  lastSequence: number,
+  capturedAt: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): void {
+  if (!isRecord(value)) {
+    issue(issues, path, "event_batch", "Event payload must be an object containing events");
+    return;
+  }
+  exactKeys(value, ["events"], ["events"], path, issues);
+  const events = value["events"];
+  if (!Array.isArray(events) || events.length === 0 || events.length > 250) {
+    issue(issues, `${path}.events`, "event_batch", "Event batches must contain 1-250 records");
+    return;
+  }
+  if (lastSequence - firstSequence + 1 !== events.length) {
+    issue(issues, `${path}.events`, "event_range_mismatch", "Event count must exactly cover eventRange");
+  }
+  let lastCapturedAt: number | undefined;
+  events.forEach((event, index) => {
+    const eventPath = `${path}.events[${index}]`;
+    if (!isRecord(event)) {
+      issue(issues, eventPath, "type", "Event batch record must be an object");
+      return;
+    }
+    exactKeys(
+      event,
+      ["sequence", "capturedAt", "payload"],
+      ["sequence", "capturedAt", "payload"],
+      eventPath,
+      issues,
+    );
+    const expectedSequence = firstSequence + index;
+    if (!isSafePositiveInteger(event["sequence"]) || event["sequence"] !== expectedSequence) {
+      issue(issues, `${eventPath}.sequence`, "event_range_mismatch", "Event sequences must be contiguous and match eventRange");
+    }
+    if (!isAddonTimestamp(event["capturedAt"])) {
+      issue(issues, `${eventPath}.capturedAt`, "format", "Event capturedAt must be positive Unix epoch seconds");
+    } else {
+      lastCapturedAt = event["capturedAt"];
+    }
+    if (!isJsonValue(event["payload"])) {
+      issue(issues, `${eventPath}.payload`, "json_value", "Event payload must be bounded JSON data");
+    }
+  });
+  if (
+    lastCapturedAt !== undefined &&
+    isUtcInstant(capturedAt) &&
+    Date.parse(capturedAt) !== lastCapturedAt * 1000
+  ) {
+    issue(issues, `${path}.events`, "captured_at_mismatch", "Envelope capturedAt must equal the final event capture time");
+  }
+}
+
+function stateSubjectMatchesScope(
+  scope: unknown,
+  subjectId: unknown,
+  guildKey: unknown,
+  sourceGuid: unknown,
+): boolean {
+  if (typeof subjectId !== "string") return false;
+  switch (scope) {
+    case "guild":
+      return subjectId === guildKey;
+    case "account":
+      return subjectId === "account";
+    case "character":
+      return subjectId === sourceGuid;
+    case "house":
+    case "neighborhood":
+    case "session":
+      return subjectId.length > 0 && subjectId.length <= 256;
+    default:
+      return false;
+  }
 }
 
 function validateGuild(
@@ -461,12 +549,18 @@ function validateAddonDatasetEnvelope(
     issue(issues, `${path}.schemaVersion`, "schema_unsupported", `Expected schema version ${SCHEMA_VERSION}`);
     valid = false;
   }
-  if (typeof value["dataset"] !== "string" || !STATE_DATASET_SET.has(value["dataset"])) {
-    issue(issues, `${path}.dataset`, "unknown_dataset", "Addon state dataset is not supported by schema v1");
+  if (!isBoundedRawStateDatasetNameV1(value["dataset"])) {
+    issue(issues, `${path}.dataset`, "invalid_dataset", "Addon state dataset name is not bounded");
     valid = false;
   }
   if (!["guild", "character", "account", "house", "neighborhood", "session"].includes(String(value["scope"]))) {
     issue(issues, `${path}.scope`, "enum", "Unknown dataset scope");
+    valid = false;
+  } else if (
+    isStateDatasetNameV1(value["dataset"]) &&
+    !datasetAllowsScopeV1(value["dataset"], value["scope"] as import("./registry.js").DatasetScopeNameV1)
+  ) {
+    issue(issues, `${path}.scope`, "dataset_scope_mismatch", "Dataset scope does not match the v1 registry");
     valid = false;
   }
   if (!isNonEmptyString(value["subjectId"], 256)) {
@@ -479,15 +573,27 @@ function validateAddonDatasetEnvelope(
   }
   if (!validateAddonGuild(value["guild"], expectedGuildKey, `${path}.guild`, issues)) valid = false;
   if (!validateAddonSourceCharacter(value["sourceCharacter"], `${path}.sourceCharacter`, issues)) valid = false;
-  if (typeof value["installationId"] !== "string" || !INSTALLATION_ID_PATTERN.test(value["installationId"])) {
-    issue(issues, `${path}.installationId`, "format", "installationId must be 16-128 base64url characters");
+  if (
+    isRecord(value["sourceCharacter"]) &&
+    !stateSubjectMatchesScope(
+      value["scope"],
+      value["subjectId"],
+      expectedGuildKey,
+      value["sourceCharacter"]["id"],
+    )
+  ) {
+    issue(issues, `${path}.subjectId`, "subject_scope_mismatch", "State subjectId must match its declared scope");
+    valid = false;
+  }
+  if (typeof value["installationId"] !== "string" || !LEGACY_INSTALLATION_ID_PATTERN.test(value["installationId"])) {
+    issue(issues, `${path}.installationId`, "format", "installationId must be a bounded base64url identifier");
     valid = false;
   } else if (expectedInstallationId !== undefined && value["installationId"] !== expectedInstallationId) {
     issue(issues, `${path}.installationId`, "installation_mismatch", "Dataset installationId must match its export");
     valid = false;
   }
-  if (!isSafeNonNegativeInteger(value["sequence"])) {
-    issue(issues, `${path}.sequence`, "format", "sequence must be a non-negative safe integer");
+  if (!isSafePositiveInteger(value["sequence"])) {
+    issue(issues, `${path}.sequence`, "format", "sequence must be a positive safe integer");
     valid = false;
   }
   if (!isAddonTimestamp(value["capturedAt"])) {
@@ -518,8 +624,8 @@ function validateAddonEvent(
   }
   requiredKeys(value, ["sequence", "capturedAt", "guildKey", "sourceCharacter", "payload"], path, issues);
   let valid = true;
-  if (!isSafeNonNegativeInteger(value["sequence"])) {
-    issue(issues, `${path}.sequence`, "format", "Event sequence must be non-negative");
+  if (!isSafePositiveInteger(value["sequence"])) {
+    issue(issues, `${path}.sequence`, "format", "Event sequence must be positive");
     valid = false;
   }
   if (!isAddonTimestamp(value["capturedAt"])) {
@@ -553,15 +659,19 @@ function validateUploadHeader(
     valid = false;
   }
   if (typeof value["installationId"] !== "string" || !INSTALLATION_ID_PATTERN.test(value["installationId"])) {
-    issue(issues, `${path}.installationId`, "format", "installationId must be 16-128 base64url characters");
+    issue(issues, `${path}.installationId`, "format", "installationId must be exactly 16 base64url characters");
     valid = false;
   }
-  if (!isSafeNonNegativeInteger(value["exportSequence"])) {
-    issue(issues, `${path}.exportSequence`, "format", "exportSequence must be a non-negative safe integer");
+  if (!isSafePositiveInteger(value["exportSequence"])) {
+    issue(issues, `${path}.exportSequence`, "format", "exportSequence must be a positive safe integer");
     valid = false;
   }
   if (!isUtcInstant(value["capturedAt"])) {
     issue(issues, `${path}.capturedAt`, "format", "Expected an RFC 3339 UTC instant");
+    valid = false;
+  }
+  if (!isAddonTimestamp(value["persistedAt"])) {
+    issue(issues, `${path}.persistedAt`, "format", "persistedAt must be positive Unix seconds");
     valid = false;
   }
   if (!isGuildKey(value["guildKey"])) {
@@ -592,20 +702,20 @@ function validateSavedVariablesGuildExport(
   if (!validateAddonGuild(input["guild"], guildKey, `${path}.guild`, issues)) valid = false;
   if (!validateAddonSourceCharacter(input["sourceCharacter"], `${path}.sourceCharacter`, issues)) valid = false;
   const installationId = typeof input["installationId"] === "string" ? input["installationId"] : undefined;
-  if (!installationId || !INSTALLATION_ID_PATTERN.test(installationId)) {
-    issue(issues, `${path}.installationId`, "format", "installationId must be 16-128 base64url characters");
+  if (!installationId || !LEGACY_INSTALLATION_ID_PATTERN.test(installationId)) {
+    issue(issues, `${path}.installationId`, "format", "installationId must be a bounded base64url identifier");
     valid = false;
   }
-  if (!isSafeNonNegativeInteger(input["sequence"])) {
-    issue(issues, `${path}.sequence`, "format", "sequence must be a non-negative safe integer");
+  if (!isSafePositiveInteger(input["sequence"])) {
+    issue(issues, `${path}.sequence`, "format", "sequence must be a positive safe integer");
     valid = false;
   }
   if (!isAddonTimestamp(input["capturedAt"])) {
     issue(issues, `${path}.capturedAt`, "format", "Addon capturedAt must be positive Unix epoch seconds");
     valid = false;
   }
-  if (input["persistedAt"] !== undefined && !isUtcInstant(input["persistedAt"])) {
-    issue(issues, `${path}.persistedAt`, "format", "Expected an RFC 3339 UTC instant");
+  if (input["persistedAt"] !== undefined && !isAddonTimestamp(input["persistedAt"])) {
+    issue(issues, `${path}.persistedAt`, "format", "Expected positive Unix epoch seconds");
     valid = false;
   }
   for (const mapName of ["datasets", "events"] as const) {
@@ -617,10 +727,33 @@ function validateSavedVariablesGuildExport(
     }
     if (mapName === "datasets") {
       for (const [key, envelope] of Object.entries(map)) {
-        if (!validateAddonDatasetEnvelope(envelope, guildKey, installationId, `${path}.${mapName}.${key}`, issues)) valid = false;
+        if (!validateAddonDatasetEnvelope(envelope, guildKey, installationId, `${path}.${mapName}.${key}`, issues)) {
+          valid = false;
+          continue;
+        }
+        const expectedStorageKey =
+          envelope.scope === "guild" || envelope.scope === "account"
+            ? envelope.dataset
+            : `${envelope.dataset}:${envelope.subjectId}`;
+        if (key !== expectedStorageKey) {
+          issue(issues, `${path}.${mapName}.${key}`, "dataset_storage_key_mismatch", "Dataset storage key must bind dataset, scope, and subject");
+          valid = false;
+        }
+        if (
+          isSafePositiveInteger(input["sequence"]) &&
+          envelope.sequence > input["sequence"]
+        ) {
+          issue(issues, `${path}.${mapName}.${key}.sequence`, "sequence_ahead_of_export", "Dataset sequence cannot exceed its enclosing export sequence");
+          valid = false;
+        }
       }
     } else {
       for (const [stream, events] of Object.entries(map)) {
+        if (!isBoundedRawEventStreamNameV1(stream)) {
+          issue(issues, `${path}.events.${stream}`, "invalid_dataset", "Event stream name is not bounded");
+          valid = false;
+          continue;
+        }
         if (!Array.isArray(events)) {
           issue(issues, `${path}.events.${stream}`, "type", "Event stream must be an array");
           valid = false;
@@ -630,6 +763,13 @@ function validateSavedVariablesGuildExport(
         events.forEach((event, index) => {
           if (!validateAddonEvent(event, guildKey, `${path}.events.${stream}[${index}]`, issues)) valid = false;
           if (isRecord(event) && isSafeNonNegativeInteger(event["sequence"])) {
+            if (
+              isSafePositiveInteger(input["sequence"]) &&
+              event["sequence"] > input["sequence"]
+            ) {
+              issue(issues, `${path}.events.${stream}[${index}].sequence`, "sequence_ahead_of_export", "Event sequence cannot exceed its enclosing export sequence");
+              valid = false;
+            }
             if (event["sequence"] as number <= previousSequence) {
               issue(issues, `${path}.events.${stream}[${index}].sequence`, "order", "Event sequences must increase");
               valid = false;
@@ -661,8 +801,16 @@ export function validateEmberSyncSavedVariablesV1(input: unknown): ValidationRes
   if (!isRecord(input)) {
     return { ok: false, issues: [{ path: "$", code: "type", message: "EmberSyncDB must be an object" }] };
   }
-  requiredKeys(input, ["schemaVersion", "exports"], "$", issues);
+  requiredKeys(input, ["schemaVersion", "installationId", "exports"], "$", issues);
   if (input["schemaVersion"] !== SCHEMA_VERSION) issue(issues, "$.schemaVersion", "schema_unsupported", `Expected schema version ${SCHEMA_VERSION}`);
+  if (typeof input["installationId"] !== "string" || !LEGACY_INSTALLATION_ID_PATTERN.test(input["installationId"])) {
+    issue(issues, "$.installationId", "format", "installationId must be a bounded base64url identifier");
+  }
+  for (const field of ["createdAt", "updatedAt"] as const) {
+    if (input[field] !== undefined && !isAddonTimestamp(input[field])) {
+      issue(issues, `$.${field}`, "format", `${field} must be positive Unix epoch seconds`);
+    }
+  }
   if (!isRecord(input["exports"])) {
     issue(issues, "$.exports", "type", "exports must be an object");
   } else {
@@ -671,7 +819,16 @@ export function validateEmberSyncSavedVariablesV1(input: unknown): ValidationRes
     }
     for (const key of ["main", "alt"] as const) {
       const guildExport = input["exports"][key];
-      if (guildExport !== undefined) validateSavedVariablesGuildExport(guildExport, key, `$.exports.${key}`, issues);
+      if (guildExport !== undefined) {
+        validateSavedVariablesGuildExport(guildExport, key, `$.exports.${key}`, issues);
+        if (
+          isRecord(guildExport) &&
+          typeof input["installationId"] === "string" &&
+          guildExport["installationId"] !== input["installationId"]
+        ) {
+          issue(issues, `$.exports.${key}.installationId`, "installation_mismatch", "Export installationId must match the database root");
+        }
+      }
     }
   }
   return issues.length === 0
@@ -689,40 +846,86 @@ export function validateDatasetEnvelopeV1(input: unknown): ValidationResult<Data
   }
   exactKeys(
     input,
-    ["schemaVersion", "protocolVersion", "dataset", "kind", "scope", "subjectId", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "coverage", "permissionEvidence", "payloadHash", "payload"],
-    ["schemaVersion", "protocolVersion", "dataset", "kind", "scope", "subjectId", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "coverage", "payloadHash", "payload"],
+    ["schemaVersion", "protocolVersion", "dataset", "kind", "scope", "subjectId", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "persistedAt", "coverage", "permissionEvidence", "eventRange", "payloadHash", "payload"],
+    ["schemaVersion", "protocolVersion", "dataset", "kind", "scope", "subjectId", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "persistedAt", "coverage", "payloadHash", "payload"],
     "$",
     issues,
   );
   validateUploadHeader(input, "$", issues);
-  if (typeof input["dataset"] !== "string" || !DATASET_SET.has(input["dataset"])) {
-    issue(issues, "$.dataset", "unknown_dataset", "Dataset is not supported by schema v1");
-  }
   if (input["kind"] !== "state" && input["kind"] !== "events") {
     issue(issues, "$.kind", "enum", "kind must be state or events");
   } else if (
-    (input["kind"] === "state" && typeof input["dataset"] === "string" && EVENT_DATASET_SET.has(input["dataset"])) ||
-    (input["kind"] === "events" && typeof input["dataset"] === "string" && !EVENT_DATASET_SET.has(input["dataset"]))
+    (input["kind"] === "state" && !isBoundedRawStateDatasetNameV1(input["dataset"])) ||
+    (input["kind"] === "events" && !isBoundedRawEventDatasetNameV1(input["dataset"]))
   ) {
-    issue(issues, "$.kind", "dataset_kind_mismatch", "Event dataset names require kind events; state dataset names require kind state");
+    issue(issues, "$.dataset", "dataset_kind_mismatch", "Dataset name must be bounded and match its state/events kind");
   }
   if (!["guild", "character", "account", "house", "neighborhood", "session"].includes(String(input["scope"]))) {
     issue(issues, "$.scope", "enum", "Unknown dataset scope");
+  } else if (input["kind"] === "events" && input["scope"] !== "guild") {
+    issue(issues, "$.scope", "dataset_scope_mismatch", "Event streams must use guild scope");
+  } else if (
+    isDatasetNameV1(input["dataset"]) &&
+    !datasetAllowsScopeV1(input["dataset"], input["scope"] as import("./registry.js").DatasetScopeNameV1)
+  ) {
+    issue(issues, "$.scope", "dataset_scope_mismatch", "Dataset scope does not match the v1 registry");
   }
   if (!isNonEmptyString(input["subjectId"], 256)) {
     issue(issues, "$.subjectId", "format", "subjectId must be 1-256 characters");
   }
   if (
-    input["kind"] === "events" &&
-    typeof input["installationId"] === "string" &&
+    input["kind"] === "state" &&
     isRecord(input["sourceCharacter"]) &&
-    typeof input["sourceCharacter"]["guid"] === "string" &&
-    isSafeNonNegativeInteger(input["exportSequence"])
+    !stateSubjectMatchesScope(
+      input["scope"],
+      input["subjectId"],
+      input["guildKey"],
+      input["sourceCharacter"]["guid"],
+    )
   ) {
-    const expectedSubject = `${input["installationId"]}:${input["sourceCharacter"]["guid"]}:${input["exportSequence"]}`;
-    if (input["subjectId"] !== expectedSubject) {
-      issue(issues, "$.subjectId", "event_subject_mismatch", "Event subjectId must bind installationId, source character GUID, and first sequence");
+    issue(issues, "$.subjectId", "subject_scope_mismatch", "State subjectId must match its declared scope");
+  }
+  if (input["kind"] === "events") {
+    if (!isRecord(input["eventRange"])) {
+      issue(issues, "$.eventRange", "required", "Event envelopes require an eventRange");
+    } else {
+      exactKeys(
+        input["eventRange"],
+        ["firstSequence", "lastSequence"],
+        ["firstSequence", "lastSequence"],
+        "$.eventRange",
+        issues,
+      );
+      const first = input["eventRange"]["firstSequence"];
+      const last = input["eventRange"]["lastSequence"];
+      if (!isSafePositiveInteger(first) || !isSafePositiveInteger(last) || first > last) {
+        issue(issues, "$.eventRange", "format", "Event range must contain ordered positive sequences");
+      } else {
+        if (isSafePositiveInteger(input["exportSequence"]) && input["exportSequence"] !== last) {
+          issue(issues, "$.exportSequence", "event_sequence_mismatch", "Event exportSequence must equal eventRange.lastSequence");
+        }
+        if (
+          typeof input["installationId"] === "string" &&
+          isRecord(input["sourceCharacter"]) &&
+          typeof input["sourceCharacter"]["guid"] === "string"
+        ) {
+          const expectedSubject = `${input["installationId"]}:${input["sourceCharacter"]["guid"]}:${first}`;
+          if (input["subjectId"] !== expectedSubject) {
+            issue(issues, "$.subjectId", "event_subject_mismatch", "Event subjectId must bind installationId, source character GUID, and first sequence");
+          }
+        }
+        validateEventBatchPayload(
+          input["payload"],
+          first,
+          last,
+          input["capturedAt"],
+          "$.payload",
+          issues,
+        );
+      }
     }
+  } else if (input["eventRange"] !== undefined) {
+    issue(issues, "$.eventRange", "forbidden", "State envelopes cannot contain eventRange");
   }
   validateCoverage(input["coverage"], "$.coverage", issues);
   if (input["permissionEvidence"] !== undefined) validatePermissionEvidence(input["permissionEvidence"], "$.permissionEvidence", issues);
@@ -741,12 +944,15 @@ export function validateSyncManifestV1(input: unknown): ValidationResult<SyncMan
   }
   exactKeys(
     input,
-    ["schemaVersion", "protocolVersion", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "segments"],
-    ["schemaVersion", "protocolVersion", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "segments"],
+    ["schemaVersion", "protocolVersion", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "persistedAt", "queuedAt", "segments"],
+    ["schemaVersion", "protocolVersion", "guildKey", "guild", "sourceCharacter", "installationId", "exportSequence", "capturedAt", "persistedAt", "queuedAt", "segments"],
     "$",
     issues,
   );
   validateUploadHeader(input, "$", issues);
+  if (!isAddonTimestamp(input["queuedAt"])) {
+    issue(issues, "$.queuedAt", "format", "queuedAt must be positive Unix seconds");
+  }
   let compressedTotal = 0;
   const uniqueSegments = new Set<string>();
 
@@ -760,14 +966,30 @@ export function validateSyncManifestV1(input: unknown): ValidationResult<SyncMan
         return;
       }
       exactKeys(segment, ["dataset", "kind", "scope", "subjectId", "coverage", "payloadHash", "envelopeHash", "compressedBytes", "expandedBytes", "eventRange"], ["dataset", "kind", "scope", "subjectId", "coverage", "payloadHash", "envelopeHash", "compressedBytes", "expandedBytes"], path, issues);
-      if (typeof segment["dataset"] !== "string" || !DATASET_SET.has(segment["dataset"])) issue(issues, `${path}.dataset`, "unknown_dataset", "Unknown dataset");
       if (segment["kind"] !== "state" && segment["kind"] !== "events") issue(issues, `${path}.kind`, "enum", "kind must be state or events");
       else if (
-        (segment["kind"] === "state" && typeof segment["dataset"] === "string" && EVENT_DATASET_SET.has(segment["dataset"])) ||
-        (segment["kind"] === "events" && typeof segment["dataset"] === "string" && !EVENT_DATASET_SET.has(segment["dataset"]))
-      ) issue(issues, `${path}.kind`, "dataset_kind_mismatch", "Event dataset names require kind events; state dataset names require kind state");
+        (segment["kind"] === "state" && !isBoundedRawStateDatasetNameV1(segment["dataset"])) ||
+        (segment["kind"] === "events" && !isBoundedRawEventDatasetNameV1(segment["dataset"]))
+      ) issue(issues, `${path}.dataset`, "dataset_kind_mismatch", "Dataset name must be bounded and match its state/events kind");
       if (!["guild", "character", "account", "house", "neighborhood", "session"].includes(String(segment["scope"]))) issue(issues, `${path}.scope`, "enum", "Unknown dataset scope");
+      else if (segment["kind"] === "events" && segment["scope"] !== "guild") issue(issues, `${path}.scope`, "dataset_scope_mismatch", "Event streams must use guild scope");
+      else if (
+        isDatasetNameV1(segment["dataset"]) &&
+        !datasetAllowsScopeV1(segment["dataset"], segment["scope"] as import("./registry.js").DatasetScopeNameV1)
+      ) issue(issues, `${path}.scope`, "dataset_scope_mismatch", "Dataset scope does not match the v1 registry");
       if (!isNonEmptyString(segment["subjectId"], 256)) issue(issues, `${path}.subjectId`, "format", "subjectId must be 1-256 characters");
+      if (
+        segment["kind"] === "state" &&
+        isRecord(input["sourceCharacter"]) &&
+        !stateSubjectMatchesScope(
+          segment["scope"],
+          segment["subjectId"],
+          input["guildKey"],
+          input["sourceCharacter"]["guid"],
+        )
+      ) {
+        issue(issues, `${path}.subjectId`, "subject_scope_mismatch", "State subjectId must match its declared scope");
+      }
       validateCoverage(segment["coverage"], `${path}.coverage`, issues);
       if (!isSha256Hex(segment["payloadHash"])) issue(issues, `${path}.payloadHash`, "format", "Expected lowercase SHA-256 hex");
       if (!isSha256Hex(segment["envelopeHash"])) issue(issues, `${path}.envelopeHash`, "format", "Expected lowercase SHA-256 hex");
@@ -789,9 +1011,16 @@ export function validateSyncManifestV1(input: unknown): ValidationResult<SyncMan
           exactKeys(segment["eventRange"], ["firstSequence", "lastSequence"], ["firstSequence", "lastSequence"], `${path}.eventRange`, issues);
           const first = segment["eventRange"]["firstSequence"];
           const last = segment["eventRange"]["lastSequence"];
-          if (!isSafeNonNegativeInteger(first) || !isSafeNonNegativeInteger(last) || first > last) issue(issues, `${path}.eventRange`, "format", "Event range must contain ordered non-negative sequences");
+          if (!isSafePositiveInteger(first) || !isSafePositiveInteger(last) || first > last) issue(issues, `${path}.eventRange`, "format", "Event range must contain ordered positive sequences");
           if (
-            isSafeNonNegativeInteger(first) &&
+            isSafePositiveInteger(last) &&
+            isSafePositiveInteger(input["exportSequence"]) &&
+            last !== input["exportSequence"]
+          ) {
+            issue(issues, `${path}.eventRange.lastSequence`, "event_sequence_mismatch", "eventRange.lastSequence must equal manifest exportSequence");
+          }
+          if (
+            isSafePositiveInteger(first) &&
             typeof input["installationId"] === "string" &&
             isRecord(input["sourceCharacter"]) &&
             typeof input["sourceCharacter"]["guid"] === "string"
@@ -823,16 +1052,4 @@ export async function verifyDatasetEnvelopePayloadHashV1(
 
 export function allowedGuildForKey(key: "main" | "alt"): CanonicalGuildIdentity {
   return ALLOWED_GUILDS[key];
-}
-
-export function isDatasetNameV1(value: unknown): value is DatasetNameV1 {
-  return typeof value === "string" && DATASET_SET.has(value);
-}
-
-export function isStateDatasetNameV1(value: unknown): value is StateDatasetNameV1 {
-  return typeof value === "string" && STATE_DATASET_SET.has(value);
-}
-
-export function isEventDatasetNameV1(value: unknown): value is EventDatasetNameV1 {
-  return typeof value === "string" && EVENT_DATASET_SET.has(value);
 }

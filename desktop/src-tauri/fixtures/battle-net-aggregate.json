@@ -1,0 +1,19 @@
+{
+  "installed": [
+    {
+      "icon_path": "C:/Games/Other/Other Launcher.exe",
+      "name": "Other Game",
+      "product_id": "other"
+    },
+    {
+      "icon_path": "G:/Battlenet/World of Warcraft/World of Warcraft Launcher.exe",
+      "name": "World of Warcraft",
+      "product_id": "wow"
+    },
+    {
+      "icon_path": "relative/path/Wow.exe",
+      "name": "Invalid Relative Entry",
+      "product_id": "wow"
+    }
+  ]
+}
