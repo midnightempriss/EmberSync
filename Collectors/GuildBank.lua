@@ -27,6 +27,8 @@ local GuildBank = {
     loadedTabs = {},
     loadedLogs = {},
     loadedText = {},
+    moneyLogLoaded = false,
+    moneyLogRequestedAt = nil,
     requestedTabs = {},
     activeRequest = nil,
     debounce = 0.75,
@@ -47,6 +49,8 @@ function GuildBank:HandleEvent(_, event, ...)
         self.loadedTabs = {}
         self.loadedLogs = {}
         self.loadedText = {}
+        self.moneyLogLoaded = false
+        self.moneyLogRequestedAt = nil
         self.requestedTabs = {}
         self.activeRequest = nil
     elseif event == "GUILDBANKFRAME_CLOSED" then
@@ -72,12 +76,17 @@ function GuildBank:HandleEvent(_, event, ...)
         end
     elseif event == "GUILDBANKLOG_UPDATE" then
         local request = self.activeRequest
-        local tabIndex = type(request) == "table" and request.logPending and request.tabIndex or nil
-        if type(tabIndex) == "number" then
-            self.loadedLogs[tabIndex] = true
-        end
-        if type(request) == "table" and request.tabIndex == tabIndex then
-            request.logPending = false
+        if type(request) == "table" and request.logPending then
+            if request.kind == "money" then
+                self.moneyLogLoaded = true
+                request.logPending = false
+            else
+                local tabIndex = request.tabIndex
+                if type(tabIndex) == "number" then
+                    self.loadedLogs[tabIndex] = true
+                    request.logPending = false
+                end
+            end
         end
     elseif event == "GUILDBANK_UPDATE_TEXT" then
         local tabIndex = ...
@@ -102,6 +111,8 @@ function GuildBank:ResetStaging()
     self.loadedTabs = {}
     self.loadedLogs = {}
     self.loadedText = {}
+    self.moneyLogLoaded = false
+    self.moneyLogRequestedAt = nil
     self.requestedTabs = {}
     self.activeRequest = nil
 end
@@ -111,20 +122,57 @@ local function collectTransactions(tabIndex)
     if type(_G.GetNumGuildBankTransactions) ~= "function" or type(_G.GetGuildBankTransaction) ~= "function" then
         return events
     end
-    local count = _G.GetNumGuildBankTransactions(tabIndex) or 0
+    local countOk, rawCount = pcall(_G.GetNumGuildBankTransactions, tabIndex)
+    local count = countOk and math.max(0, math.floor(Util.SafeNumber(rawCount) or 0)) or 0
     for index = 1, math.min(count, 200) do
         Util.Cooperate(index, 25)
-        local transactionType, name, itemLink, countOrMoney, tab1, tab2, year, month, day, hour =
-            _G.GetGuildBankTransaction(tabIndex, index)
-        events[#events + 1] = {
-            type = transactionType,
-            actor = name,
-            itemLink = itemLink,
-            countOrMoney = countOrMoney,
-            sourceTab = tab1,
-            destinationTab = tab2,
-            occurred = { year = year, month = month, day = day, hour = hour },
-        }
+        local result = { pcall(_G.GetGuildBankTransaction, tabIndex, index) }
+        if result[1] then
+            events[#events + 1] = {
+                type = Util.SafeString(result[2], true),
+                actor = Util.SafeString(result[3], true),
+                itemLink = Util.SafeString(result[4], false),
+                countOrMoney = Util.SafeNumber(result[5]),
+                sourceTab = Util.SafeNumber(result[6]),
+                destinationTab = Util.SafeNumber(result[7]),
+                occurred = {
+                    year = Util.SafeNumber(result[8]),
+                    month = Util.SafeNumber(result[9]),
+                    day = Util.SafeNumber(result[10]),
+                    hour = Util.SafeNumber(result[11]),
+                },
+            }
+        end
+    end
+    return events
+end
+
+local function collectMoneyTransactions()
+    local events = {}
+    if type(_G.GetNumGuildBankMoneyTransactions) ~= "function"
+        or type(_G.GetGuildBankMoneyTransaction) ~= "function" then
+        return events
+    end
+    local countOk, rawCount = pcall(_G.GetNumGuildBankMoneyTransactions)
+    local count = countOk and math.max(0, math.floor(Util.SafeNumber(rawCount) or 0)) or 0
+    for index = 1, math.min(count, 200) do
+        Util.Cooperate(index, 25)
+        local result = { pcall(_G.GetGuildBankMoneyTransaction, index) }
+        if result[1] then
+            local amount = Util.SafeNumber(result[4])
+            events[#events + 1] = {
+                type = Util.SafeString(result[2], true),
+                actor = Util.SafeString(result[3], true),
+                amountCopper = amount,
+                countOrMoney = amount,
+                occurred = {
+                    year = Util.SafeNumber(result[5]),
+                    month = Util.SafeNumber(result[6]),
+                    day = Util.SafeNumber(result[7]),
+                    hour = Util.SafeNumber(result[8]),
+                },
+            }
+        end
     end
     return events
 end
@@ -156,6 +204,7 @@ local function bankEventSignature(event, occurredAt, tabIndex)
         signaturePart(event.actor),
         signaturePart(event.itemLink),
         signaturePart(event.countOrMoney),
+        signaturePart(event.amountCopper),
         signaturePart(event.sourceTab),
         signaturePart(event.destinationTab),
         signaturePart(tabIndex),
@@ -163,7 +212,7 @@ local function bankEventSignature(event, occurredAt, tabIndex)
     }, "|")
 end
 
-local function appendNewBankEvents(tabs)
+local function appendNewBankEvents(tabs, moneyTransactions, moneyTransactionsPreserved, moneyLogIndex)
     if type(Database.AppendEvent) ~= "function" or type(tabs) ~= "table" then
         return
     end
@@ -188,35 +237,45 @@ local function appendNewBankEvents(tabs)
     end
     local observedAt = Util.Now()
     local occurrences = {}
+    local function appendEvent(event, tabIndex, tabName, provenance)
+        if type(event) ~= "table" then
+            return
+        end
+        local occurredAt = approximateOccurredAt(event.occurred, observedAt)
+        local signature = bankEventSignature(event, occurredAt, tabIndex)
+        occurrences[signature] = (occurrences[signature] or 0) + 1
+        local occurrence = occurrences[signature]
+        local key = signature .. "#" .. occurrence
+        if not seen[key] then
+            local payload = Util.Copy(event)
+            payload.tabIndex = tabIndex
+            payload.tabName = tabName
+            payload.occurredAt = occurredAt
+            payload.observedAt = observedAt
+            payload.occurrence = occurrence
+            payload.provenance = provenance
+            Database:AppendEvent("guild_bank", payload)
+            seen[key] = true
+        end
+    end
     for tabIndex, tab in pairs(tabs) do
         if type(tab) == "table" and tab.transactionsPreserved ~= true
             and type(tab.transactions) == "table" then
             for _, event in ipairs(tab.transactions) do
-                if type(event) == "table" then
-                    local occurredAt = approximateOccurredAt(event.occurred, observedAt)
-                    local signature = bankEventSignature(event, occurredAt, tabIndex)
-                    occurrences[signature] = (occurrences[signature] or 0) + 1
-                    local occurrence = occurrences[signature]
-                    local key = signature .. "#" .. occurrence
-                    if not seen[key] then
-                        local payload = Util.Copy(event)
-                        payload.tabIndex = tabIndex
-                        payload.tabName = tab.name
-                        payload.occurredAt = occurredAt
-                        payload.observedAt = observedAt
-                        payload.occurrence = occurrence
-                        payload.provenance = "guild_bank_log"
-                        Database:AppendEvent("guild_bank", payload)
-                        seen[key] = true
-                    end
-                end
+                appendEvent(event, tabIndex, tab.name, "guild_bank_log")
             end
+        end
+    end
+    if moneyTransactionsPreserved ~= true and type(moneyTransactions) == "table" then
+        for _, event in ipairs(moneyTransactions) do
+            appendEvent(event, moneyLogIndex, "Gold", "guild_bank_money_log")
         end
     end
 end
 
 local function requestVisibleTab(tabIndex)
     local request = {
+        kind = "tab",
         tabIndex = tabIndex,
         startedAt = Util.MonotonicTime(),
         itemsPending = false,
@@ -233,6 +292,29 @@ local function requestVisibleTab(tabIndex)
         request.textPending = pcall(_G.QueryGuildBankText, tabIndex)
     end
     return requestFinished(request) and nil or request
+end
+
+local function requestMoneyLog(tabIndex)
+    local request = {
+        kind = "money",
+        tabIndex = tabIndex,
+        startedAt = Util.MonotonicTime(),
+        itemsPending = false,
+        logPending = false,
+        textPending = false,
+    }
+    if type(_G.QueryGuildBankLog) == "function" then
+        request.logPending = pcall(_G.QueryGuildBankLog, tabIndex)
+    end
+    return requestFinished(request) and nil or request
+end
+
+local function safeApiNumber(callback, ...)
+    if type(callback) ~= "function" then
+        return nil
+    end
+    local ok, value = pcall(callback, ...)
+    return ok and Util.SafeNumber(value) or nil
 end
 
 local function previousPayloadForSource(context)
@@ -287,11 +369,23 @@ function GuildBank:Collect(context)
         and now - (self.activeRequest.startedAt or now) >= 5 then
         self.activeRequest = nil
     end
-    local tabCount = _G.GetNumGuildBankTabs() or 0
+    local tabCount = math.max(0, math.floor(safeApiNumber(_G.GetNumGuildBankTabs) or 0))
+    local moneyLogIndex = math.floor(Util.SafeNumber(_G.MAX_GUILDBANK_TABS) or tabCount) + 1
+    local moneyLogSupported = type(_G.QueryGuildBankLog) == "function"
+        and type(_G.GetNumGuildBankMoneyTransactions) == "function"
+        and type(_G.GetGuildBankMoneyTransaction) == "function"
     for tabIndex = 1, tabCount do
         local name, icon, isViewable, canDeposit, numWithdrawals, remainingWithdrawals
         if type(_G.GetGuildBankTabInfo) == "function" then
-            name, icon, isViewable, canDeposit, numWithdrawals, remainingWithdrawals = _G.GetGuildBankTabInfo(tabIndex)
+            local info = { pcall(_G.GetGuildBankTabInfo, tabIndex) }
+            if info[1] then
+                name = Util.SafeString(info[2], true)
+                icon = Util.SafeNumber(info[3])
+                isViewable = Util.SafeBoolean(info[4])
+                canDeposit = Util.SafeBoolean(info[5])
+                numWithdrawals = Util.SafeNumber(info[6])
+                remainingWithdrawals = Util.SafeNumber(info[7])
+            end
         end
         if type(isViewable) == "boolean" then
             knownTabs = knownTabs + 1
@@ -322,10 +416,17 @@ function GuildBank:Collect(context)
                     Util.Cooperate(((tabIndex - 1) * 98) + slot, 25)
                     local texture, itemCount, isLocked, isFiltered, quality
                     if type(_G.GetGuildBankItemInfo) == "function" then
-                        texture, itemCount, isLocked, isFiltered, quality = _G.GetGuildBankItemInfo(tabIndex, slot)
+                        local info = { pcall(_G.GetGuildBankItemInfo, tabIndex, slot) }
+                        if info[1] then
+                            texture, itemCount, isLocked, isFiltered, quality =
+                                info[2], info[3], info[4], info[5], info[6]
+                        end
                     end
-                    local itemLink = type(_G.GetGuildBankItemLink) == "function"
-                        and _G.GetGuildBankItemLink(tabIndex, slot) or nil
+                    local itemLink
+                    if type(_G.GetGuildBankItemLink) == "function" then
+                        local linkOk, link = pcall(_G.GetGuildBankItemLink, tabIndex, slot)
+                        itemLink = linkOk and link or nil
+                    end
                     local safeItemLink = Util.SafeString(itemLink, false)
                     local safeTexture = Util.SafeNumber(texture)
                     local itemID = safeItemLink
@@ -348,7 +449,8 @@ function GuildBank:Collect(context)
                 tab.transactions = collectTransactions(tabIndex)
             end
             if tab.textLoaded and type(_G.GetGuildBankText) == "function" then
-                tab.text = _G.GetGuildBankText(tabIndex)
+                local ok, value = pcall(_G.GetGuildBankText, tabIndex)
+                tab.text = ok and Util.SafeString(value, true) or nil
             end
             preserveLoadedFields(tab, type(previousPayload) == "table"
                 and type(previousPayload.tabs) == "table" and previousPayload.tabs[tabIndex] or nil)
@@ -369,19 +471,37 @@ function GuildBank:Collect(context)
         tabs[tabIndex] = tab
     end
 
-    if self.activeRequest == nil and nextTabToRequest then
-        self.activeRequest = requestVisibleTab(nextTabToRequest)
-        if self.activeRequest then
-            self.requestedTabs[nextTabToRequest] = now
+    if self.activeRequest == nil then
+        if nextTabToRequest then
+            self.activeRequest = requestVisibleTab(nextTabToRequest)
+            if self.activeRequest then
+                self.requestedTabs[nextTabToRequest] = now
+            end
+        elseif moneyLogSupported and self.moneyLogLoaded ~= true
+            and (not self.moneyLogRequestedAt or now - self.moneyLogRequestedAt >= 5) then
+            self.activeRequest = requestMoneyLog(moneyLogIndex)
+            if self.activeRequest then
+                self.moneyLogRequestedAt = now
+            end
         end
     end
 
+    local moneyTransactions = nil
+    local moneyTransactionsPreserved = false
+    if moneyLogSupported and self.moneyLogLoaded == true then
+        moneyTransactions = collectMoneyTransactions()
+    elseif type(previousPayload) == "table"
+        and type(previousPayload.moneyTransactions) == "table" then
+        moneyTransactions = Util.Copy(previousPayload.moneyTransactions)
+        moneyTransactionsPreserved = true
+    end
     local payload = {
-        money = type(_G.GetGuildBankMoney) == "function" and _G.GetGuildBankMoney() or nil,
-        withdrawableMoney = type(_G.GetGuildBankWithdrawMoney) == "function" and _G.GetGuildBankWithdrawMoney() or nil,
+        money = safeApiNumber(_G.GetGuildBankMoney),
+        withdrawableMoney = safeApiNumber(_G.GetGuildBankWithdrawMoney),
+        moneyTransactions = moneyTransactions,
         tabs = tabs,
     }
-    appendNewBankEvents(tabs)
+    appendNewBankEvents(tabs, moneyTransactions, moneyTransactionsPreserved, moneyLogIndex)
     local coverage
     local requestedTab = type(self.activeRequest) == "table" and self.activeRequest.tabIndex or nextTabToRequest
     if tabCount == 0 or knownTabs < tabCount then
@@ -407,6 +527,14 @@ function GuildBank:Collect(context)
             requestedTab = requestedTab,
             opportunity = "Keep the Guild Bank open while EmberSync loads each viewable tab, tab text, and transaction log.",
         })
+    elseif moneyLogSupported and self.moneyLogLoaded ~= true then
+        coverage = Coverage.Partial("guild_bank_money_log_loading", {
+            tabCount = tabCount,
+            visibleTabs = visibleTabs,
+            fullyLoadedTabs = fullyLoadedTabs,
+            moneyLogIndex = moneyLogIndex,
+            opportunity = "Keep the Guild Bank open while EmberSync loads the separate gold transaction log.",
+        })
     elseif visibleTabs < tabCount then
         coverage = Coverage.Partial("rank_restricted_bank_tabs", {
             tabCount = tabCount,
@@ -420,6 +548,7 @@ function GuildBank:Collect(context)
             tabCount = tabCount,
             visibleTabs = visibleTabs,
             fullyLoadedTabs = fullyLoadedTabs,
+            moneyLogLoaded = not moneyLogSupported or self.moneyLogLoaded == true,
         })
     end
     local permissionEvidence = {

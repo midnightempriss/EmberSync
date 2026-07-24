@@ -391,11 +391,21 @@ test("guild bank materializes newly observed transactions once into the canonica
     GetGuildBankText = function() return "Bank text" end
     GetGuildBankMoney = function() return 100 end
     GetGuildBankWithdrawMoney = function() return 50 end
+    MAX_GUILDBANK_TABS = 8
+    QueryGuildBankLog = function() end
+    GetNumGuildBankMoneyTransactions = function() return 2 end
+    GetGuildBankMoneyTransaction = function(index)
+      if index == 1 then
+        return "deposit", "Member-Dalaran", 50000, 0, 0, 0, 2
+      end
+      return "withdraw", "Officer-Dalaran", 12500, 0, 0, 0, 1
+    end
   ` + await moduleSource("Collectors/GuildBank.lua"), `
     registered.isOpen = true
     registered.loadedTabs[1] = true
     registered.loadedLogs[1] = true
     registered.loadedText[1] = true
+    registered.moneyLogLoaded = true
     local context = {
       guild = { key = "main", rankIndex = 5, rankName = "Member" },
       sourceCharacter = { id = "Player-Test" },
@@ -403,11 +413,16 @@ test("guild bank materializes newly observed transactions once into the canonica
     local payload, coverage = registered:Collect(context)
     assert(coverage.status == "complete")
     assert(payload.tabs[1].transactions[1].type == "deposit")
-    assert(#appended == 1 and appended[1].stream == "guild_bank")
+    assert(#payload.moneyTransactions == 2)
+    assert(payload.moneyTransactions[1].amountCopper == 50000)
+    assert(#appended == 3 and appended[1].stream == "guild_bank")
     assert(appended[1].payload.provenance == "guild_bank_log")
     assert(appended[1].payload.tabIndex == 1)
+    assert(appended[2].payload.provenance == "guild_bank_money_log")
+    assert(appended[2].payload.tabName == "Gold")
+    assert(appended[2].payload.amountCopper == 50000)
     registered:Collect(context)
-    assert(#appended == 1, "a retained transaction snapshot must not be appended twice")
+    assert(#appended == 3, "retained item and money transactions must not be appended twice")
   `);
 });
 

@@ -3,6 +3,19 @@
 All notable EmberSync changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## 0.1.6 - 2026-07-23
+
+### Fixed
+
+- Added passive, context-gated collection of WoW's separate Guild Bank money
+  log so deposits, withdrawals, and repair spending synchronize alongside item
+  transactions without fabricating missing history.
+- Preserved same-character last-good money-log records while the Guild Bank is
+  closed, deduplicated repeated snapshots into the canonical bank event stream,
+  and reported money-log loading independently from tab coverage.
+- Guarded Guild Bank tab metadata, item transactions, gold balances, and money
+  transactions before using values that the game may temporarily protect.
+
 ## 0.1.5 - 2026-07-23
 
 ### Fixed
