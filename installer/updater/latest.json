@@ -1,0 +1,55 @@
+{
+  "version": "0.1.6",
+  "notes": "See CHANGELOG.md for this release. Native installers are initially unsigned; updater payloads are signed by EmberSync.",
+  "pub_date": "2026-07-24T04:07:02.840Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazBsbDZta2g5dkUxdFRFb3RGMDkxN1VpUkJVNC9tUnlwb1k3OFdJZ3FDNHN6K0JkZTRaYVFWUjRUbWYwZk5naDEvS1ZNUjJIeDNVSTBDMDFQVWM3bWdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY1ODk4CWZpbGU6RW1iZXJTeW5jLmFwcC50YXIuZ3oKOVhRS2I4TWpzT1FpbGM3QXB3aXR4ZmMwS0I1eHAzaWJ0WHBTT0tQRURCaDZzK1NqSWViT3ZEbzRjMUJoMDZjY1lpNTVKSS91WkJHdGYwMktiZHVuQnc9PQo=",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487978498"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazBsbDZta2g5dkUxdFRFb3RGMDkxN1VpUkJVNC9tUnlwb1k3OFdJZ3FDNHN6K0JkZTRaYVFWUjRUbWYwZk5naDEvS1ZNUjJIeDNVSTBDMDFQVWM3bWdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY1ODk4CWZpbGU6RW1iZXJTeW5jLmFwcC50YXIuZ3oKOVhRS2I4TWpzT1FpbGM3QXB3aXR4ZmMwS0I1eHAzaWJ0WHBTT0tQRURCaDZzK1NqSWViT3ZEbzRjMUJoMDZjY1lpNTVKSS91WkJHdGYwMktiZHVuQnc9PQo=",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487978498"
+    },
+    "darwin-universal": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazBsbDZta2g5dkUxdFRFb3RGMDkxN1VpUkJVNC9tUnlwb1k3OFdJZ3FDNHN6K0JkZTRaYVFWUjRUbWYwZk5naDEvS1ZNUjJIeDNVSTBDMDFQVWM3bWdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY1ODk4CWZpbGU6RW1iZXJTeW5jLmFwcC50YXIuZ3oKOVhRS2I4TWpzT1FpbGM3QXB3aXR4ZmMwS0I1eHAzaWJ0WHBTT0tQRURCaDZzK1NqSWViT3ZEbzRjMUJoMDZjY1lpNTVKSS91WkJHdGYwMktiZHVuQnc9PQo=",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487978498"
+    },
+    "darwin-aarch64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazBsbDZta2g5dkUxdFRFb3RGMDkxN1VpUkJVNC9tUnlwb1k3OFdJZ3FDNHN6K0JkZTRaYVFWUjRUbWYwZk5naDEvS1ZNUjJIeDNVSTBDMDFQVWM3bWdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY1ODk4CWZpbGU6RW1iZXJTeW5jLmFwcC50YXIuZ3oKOVhRS2I4TWpzT1FpbGM3QXB3aXR4ZmMwS0I1eHAzaWJ0WHBTT0tQRURCaDZzK1NqSWViT3ZEbzRjMUJoMDZjY1lpNTVKSS91WkJHdGYwMktiZHVuQnc9PQo=",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487978498"
+    },
+    "darwin-x86_64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazBsbDZta2g5dkUxdFRFb3RGMDkxN1VpUkJVNC9tUnlwb1k3OFdJZ3FDNHN6K0JkZTRaYVFWUjRUbWYwZk5naDEvS1ZNUjJIeDNVSTBDMDFQVWM3bWdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY1ODk4CWZpbGU6RW1iZXJTeW5jLmFwcC50YXIuZ3oKOVhRS2I4TWpzT1FpbGM3QXB3aXR4ZmMwS0I1eHAzaWJ0WHBTT0tQRURCaDZzK1NqSWViT3ZEbzRjMUJoMDZjY1lpNTVKSS91WkJHdGYwMktiZHVuQnc9PQo=",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487978498"
+    },
+    "darwin-universal-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazBsbDZta2g5dkUxdFRFb3RGMDkxN1VpUkJVNC9tUnlwb1k3OFdJZ3FDNHN6K0JkZTRaYVFWUjRUbWYwZk5naDEvS1ZNUjJIeDNVSTBDMDFQVWM3bWdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY1ODk4CWZpbGU6RW1iZXJTeW5jLmFwcC50YXIuZ3oKOVhRS2I4TWpzT1FpbGM3QXB3aXR4ZmMwS0I1eHAzaWJ0WHBTT0tQRURCaDZzK1NqSWViT3ZEbzRjMUJoMDZjY1lpNTVKSS91WkJHdGYwMktiZHVuQnc9PQo=",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487978498"
+    },
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazE4UkU4eW9ObHVkNS90SWZDQnkwWERIZzFLUXI2V2QwRjZRdWFTZDVBNEdyOVRCOWh3TERuVzJVSlFSUDZXU2t6K0xuamNTeWhGSUs3RXJVNVA0dFEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY2MDA5CWZpbGU6RW1iZXJTeW5jXzAuMS42X2FtZDY0LkFwcEltYWdlCnJXN2dlb3N3SDZNcmhoUmcvYU1DOG9mRmVVUXFBQW1aTWJUa1cwaDh2MmZDcjBCVzZqVWlFMERuRlRVYitEczB5WjlZams4LzltTk5QamdsMmJMNENBPT0K",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487979953"
+    },
+    "linux-x86_64-appimage": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazE4UkU4eW9ObHVkNS90SWZDQnkwWERIZzFLUXI2V2QwRjZRdWFTZDVBNEdyOVRCOWh3TERuVzJVSlFSUDZXU2t6K0xuamNTeWhGSUs3RXJVNVA0dFEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY2MDA5CWZpbGU6RW1iZXJTeW5jXzAuMS42X2FtZDY0LkFwcEltYWdlCnJXN2dlb3N3SDZNcmhoUmcvYU1DOG9mRmVVUXFBQW1aTWJUa1cwaDh2MmZDcjBCVzZqVWlFMERuRlRVYitEczB5WjlZams4LzltTk5QamdsMmJMNENBPT0K",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487979953"
+    },
+    "linux-x86_64-deb": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazNsZklnN1NsRmpyWi9yOFZab0cxbzduK1QvR0swZTFYTzFNT1VWTzJCMUZGOUd4Rmx1am9YY0lPd3VEYjNXY3FaL0NHK1N2Qk9jTkJkZkZFcmx3T3dRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY2MDEwCWZpbGU6RW1iZXJTeW5jXzAuMS42X2FtZDY0LmRlYgp6MEpRQ0l0c2ppbFoxbEtoRWdXQVVXSmdCMFJMSUNja3BDVTRNNEVUZGZWenhYdDNVbldDbmtSeGM3WjJ6NEhyc25UR3NDVXJFejdIMlZQblh4cFJEdz09Cg==",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487979898"
+    },
+    "linux-x86_64-rpm": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMazZGMjZxNGNEaVNJREZwZ25CVlBCeVg3REZPYnJ4UlJPK3BXODB3RXBib3BZVDJDREVtM0l4cUlPTkVZSitMTEs0akpwTVlXNjRGV2k2YktNUHhEQVEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY2MDEwCWZpbGU6RW1iZXJTeW5jLTAuMS42LTEueDg2XzY0LnJwbQprcE9HQS8zOThBZnNaRVg1dTZPN0pXdHFDLzZFQ25HUnBhai8yY3piMzZ5Y1ZIMWRTS0hoTGhsRStyZFR2VVF5ajVBajJkUHY1WDFZRTAvR2xlYlBBdz09Cg==",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487979916"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMaytOd05ZNnFWYUJwN0k5VFhESERYalBMVm41ZEJUK3QrZnltY2R0UmJxa1VzSnZUMU9UVzlrRVJyRWlpSERLM2tDbGNSMWpZM2Z5cGtuVWZKWWhvSHdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY2MDIxCWZpbGU6RW1iZXJTeW5jXzAuMS42X3g2NC1zZXR1cC5leGUKNHRKVm93ZzMvb1FXenRWYzlVU3VaTDlLcGFhcEFuUjRvR0EvVVhmKzJER0ZjNFdzL0JNKzJRL0VhZVdxMmlweXU3UTNRRW9aK0t4YmROa3F6TVZ2RHc9PQo=",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487980060"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUlVINmFmSUdMaytOd05ZNnFWYUJwN0k5VFhESERYalBMVm41ZEJUK3QrZnltY2R0UmJxa1VzSnZUMU9UVzlrRVJyRWlpSERLM2tDbGNSMWpZM2Z5cGtuVWZKWWhvSHdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODY2MDIxCWZpbGU6RW1iZXJTeW5jXzAuMS42X3g2NC1zZXR1cC5leGUKNHRKVm93ZzMvb1FXenRWYzlVU3VaTDlLcGFhcEFuUjRvR0EvVVhmKzJER0ZjNFdzL0JNKzJRL0VhZVdxMmlweXU3UTNRRW9aK0t4YmROa3F6TVZ2RHc9PQo=",
+      "url": "https://api.github.com/repos/midnightempriss/EmberSync/releases/assets/487980060"
+    }
+  }
+}
