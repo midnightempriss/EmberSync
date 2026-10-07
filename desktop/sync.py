@@ -65,10 +65,11 @@ class DeliveryWorker:
         return ack
 
     def request(self, body, credential):
-        from device import sign_request_headers
+        from device import APP_VERSION, sign_request_headers
         headers = sign_request_headers(body, credential, method='POST', path=INGEST_PATH)
         request = urllib.request.Request(self.endpoint, data=body,
-                                        headers={'Content-Type': 'application/json', **headers}, method='POST')
+                                        headers={'Content-Type': 'application/json', **headers,
+                                                 'User-Agent': 'EmberSync/' + APP_VERSION}, method='POST')
         try:
             with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
                 return response.status, self._read_ack(response)

@@ -136,6 +136,26 @@ class Response(io.BytesIO):
 
 
 class TransportTests(unittest.TestCase):
+    def test_each_pairing_transport_sends_honest_version_header_and_exact_signed_bytes(self):
+        from device import APP_VERSION
+        from pairing import NoRedirect
+        body=b'{"fixture":"signed bytes"}';signed={'x-embersync-signature':'fixture-signature'}
+        captured=[]
+        class Opener:
+            def open(self,request,timeout):
+                captured.append((request,timeout));return Response(b'{"fixture":true}')
+        for path in (START_PATH,POLL_PATH,REVOKE_PATH):
+            with self.subTest(path=path),patch('pairing.urllib.request.build_opener',return_value=Opener()) as builder:
+                self.assertEqual(request_json('POST',path,body,signed),(200,{'fixture':True}))
+                request,timeout=captured[-1]
+                self.assertEqual(request.full_url,ORIGIN+path);self.assertEqual(request.get_method(),'POST')
+                self.assertEqual(request.data,body);self.assertEqual(timeout,20)
+                self.assertEqual(request.get_header('User-agent'),'EmberSync/'+APP_VERSION)
+                self.assertEqual(request.get_header('X-embersync-signature'),'fixture-signature')
+                self.assertEqual(request.get_header('Content-type'),'application/json')
+                self.assertIsNone(request.get_header('Cookie'));self.assertIsNone(request.get_header('Authorization'))
+                self.assertIsInstance(builder.call_args.args[0],NoRedirect)
+
     def test_response_bounds_type_and_fixed_endpoint(self):
         for raw, content_type in ((b'x' * (MAX_RESPONSE + 1), 'application/json'),
                                   (b'[]', 'application/json'), (b'{}', 'text/html'),

@@ -12,7 +12,7 @@ import sys
 import time
 
 SERVICE = 'RainingEmbers.EmberSyncV2'
-APP_VERSION = '2.0.0-preview.2'
+APP_VERSION = '2.0.0-preview.3'
 DEVICE_ID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 PATHS = frozenset('/api/embersync/v2/' + suffix for suffix in
                   ('ingest', 'pairing/start', 'pairing/poll', 'devices/revoke'))

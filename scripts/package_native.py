@@ -17,7 +17,7 @@ if system=='Windows':
     run(str(OUT/'EmberSync-Preview.exe'),'--ui-smoke-test')
 elif system=='Darwin':
     app=OUT/'EmberSync-Preview.app'
-    plist=app/'Contents/Info.plist';info=plistlib.loads(plist.read_bytes());info['CFBundleShortVersionString']='2.0.0';info['CFBundleVersion']='2.0.2';plist.write_bytes(plistlib.dumps(info))
+    plist=app/'Contents/Info.plist';info=plistlib.loads(plist.read_bytes());info['CFBundleShortVersionString']='2.0.0';info['CFBundleVersion']='2.0.3';plist.write_bytes(plistlib.dumps(info))
     assert info['CFBundleIdentifier']=='org.rainingembers.EmberSyncPreview'
     run('codesign','--force','--deep','--sign','-',str(app));run('codesign','--verify','--deep',str(app))
     run('file',str(app/'Contents/MacOS/EmberSync-Preview'))
@@ -38,13 +38,13 @@ elif system=='Linux':
     (stage/'usr/bin/embersync-preview').symlink_to('/opt/embersync-preview/EmberSync-Preview')
     (stage/'usr/share/applications/embersync-preview.desktop').write_text('[Desktop Entry]\nType=Application\nName=EmberSync Preview\nComment=Browser-approved guild roster evidence desktop\nExec=/opt/embersync-preview/EmberSync-Preview\nTerminal=false\nCategories=Utility;\n',encoding='utf-8')
     debarch={'x86_64':'amd64','aarch64':'arm64'}[arch]
-    (stage/'DEBIAN/control').write_text(f'Package: embersync-preview\nVersion: 2.0.0~preview.2\nSection: utils\nPriority: optional\nArchitecture: {debarch}\nMaintainer: EmberSync Project\nDepends: libc6 (>= 2.39), libx11-6, libxext6, libxrender1, libxft2, libfontconfig1\nDescription: Raining Embers roster evidence desktop\n Browser approval and a native-vault device credential are required for upload.\n Local review works offline. Uploads require an available Secret Service vault.\n',encoding='utf-8')
+    (stage/'DEBIAN/control').write_text(f'Package: embersync-preview\nVersion: 2.0.0~preview.3\nSection: utils\nPriority: optional\nArchitecture: {debarch}\nMaintainer: EmberSync Project\nDepends: libc6 (>= 2.39), libx11-6, libxext6, libxrender1, libxft2, libfontconfig1\nDescription: Raining Embers roster evidence desktop\n Browser approval and a native-vault device credential are required for upload.\n Local review works offline. Uploads require an available Secret Service vault.\n',encoding='utf-8')
     run('dpkg-deb','--root-owner-group','--build',str(stage),str(OUT/f'EmberSync-Preview-linux-{debarch}.deb'))
     run('dpkg-deb','--info',str(OUT/f'EmberSync-Preview-linux-{debarch}.deb'))
     run('dpkg-deb','--contents',str(OUT/f'EmberSync-Preview-linux-{debarch}.deb'))
 else:raise RuntimeError('Unsupported native platform')
 files=[p for p in OUT.iterdir() if p.is_file()]
-manifest={'version':'2.0.0-preview.2','platform':system,'osVersion':platform.platform(),'architecture':arch,'pythonVersion':sys.version,'glibc':platform.libc_ver(),'sourceCommit':os.environ.get('GITHUB_SHA'),'sync':'pairing_ready_production_enablement_pending','signing':'ad_hoc_unnotarized' if system=='Darwin' else 'unsigned','nativeSelfTest':'passed','tkCreationSmokeTest':'passed','sourceGuiFixtureQA':'passed','sourceGuiFixtureChecks':source_qa['checks'],'installerExecuted':False,'guiInteractionTested':False,'livePairingTested':False,'liveUploadTested':False,'files':{p.name:{'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size} for p in files}}
+manifest={'version':'2.0.0-preview.3','platform':system,'osVersion':platform.platform(),'architecture':arch,'pythonVersion':sys.version,'glibc':platform.libc_ver(),'sourceCommit':os.environ.get('GITHUB_SHA'),'sync':'pc_scoped_browser_approval_required','signing':'ad_hoc_unnotarized' if system=='Darwin' else 'unsigned','nativeSelfTest':'passed','tkCreationSmokeTest':'passed','sourceGuiFixtureQA':'passed','sourceGuiFixtureChecks':source_qa['checks'],'installerExecuted':False,'guiInteractionTested':False,'livePairingTested':False,'liveUploadTested':False,'files':{p.name:{'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size} for p in files}}
 (OUT/'NATIVE-BUILD.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
 # The local executor transfers at most32MiB per artifact. Deliver independently
 # hashed20MiB chunks, reassembled byte-for-byte before any installer is used.

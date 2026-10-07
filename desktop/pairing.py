@@ -40,7 +40,8 @@ def request_json(method, path, body, headers):
     if not isinstance(body, bytes) or len(body) > 4096:
         raise PairingError('invalid_pairing_request')
     request = urllib.request.Request(ORIGIN + path, data=body, method=method,
-                                     headers={'Content-Type': 'application/json', **headers})
+                                     headers={'Content-Type': 'application/json', **headers,
+                                              'User-Agent': 'EmberSync/' + APP_VERSION})
     opener = urllib.request.build_opener(NoRedirect())
     try:
         response = opener.open(request, timeout=20)

@@ -301,6 +301,7 @@ class DeliveryTests(unittest.TestCase):
                 DeliveryWorker._read_ack(io.BytesIO(data))
 
     def test_request_signs_exact_method_path_and_bytes_without_real_http(self):
+        from device import APP_VERSION
         captured = []
         class Response(io.BytesIO):
             status = 200
@@ -317,6 +318,11 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(captured[0][0].full_url, ENDPOINT)
         self.assertEqual(captured[0][0].data, body)
         self.assertEqual(captured[0][0].get_method(), 'POST')
+        self.assertEqual(captured[0][0].get_header('User-agent'), 'EmberSync/' + APP_VERSION)
+        self.assertEqual(captured[0][0].get_header('X-embersync-signature'), 'fixture')
+        self.assertEqual(captured[0][0].get_header('Content-type'), 'application/json')
+        self.assertIsNone(captured[0][0].get_header('Cookie'))
+        self.assertIsNone(captured[0][0].get_header('Authorization'))
         self.assertEqual(captured[0][1], 20)
 
     def test_http_auth_error_body_is_read_without_leaking_response(self):

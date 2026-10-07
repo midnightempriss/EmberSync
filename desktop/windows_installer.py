@@ -31,7 +31,7 @@ def main():
     frame=ttk.Frame(root,padding=24);frame.pack(fill='both',expand=True)
     ttk.Label(frame,text='EmberSync Preview',font=('Segoe UI',22,'bold')).pack(anchor='w')
     ttk.Label(frame,text='Install the roster evidence desktop for this Windows user.\nWebsite upload requires approval from your existing member account\nand a supported operating system credential vault.\nLocal review works offline. Unsigned build. No addon files are installed.',wraplength=570).pack(anchor='w',pady=20)
-    destination=Path(os.environ['LOCALAPPDATA'])/'EmberSync-Preview-2.0.0-preview.2'
+    destination=Path(os.environ['LOCALAPPDATA'])/'EmberSync-Preview-2.0.0-preview.3'
     ttk.Label(frame,text=f'Install folder: {destination}',wraplength=570).pack(anchor='w')
     def install():
         try:

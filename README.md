@@ -1,8 +1,10 @@
-# EmberSync 2.0.0 preview.2 native builds
+# EmberSync desktop 2.0.0 preview.3 native builds
 
 Fresh Lua addon and Python/Tk desktop for Raining Embers. This artifact-only preview branch preserves the legacy history and leaves the default branch/release workflow unchanged. No GitHub release is created. Website source/publication is managed separately; native builds never enable production flags or credentials.
 
 The desktop includes browser-approved Ed25519 device pairing, a narrow owned-character/guild scope, native OS-vault adapters, signed durable scoped delivery and revocation. It starts with uploads paused. No actual account, production session or persistent credential is used by CI; fixture keys/vaults are ephemeral.
+
+Preview.3 fixes a real production transport issue: pairing and upload requests now identify themselves honestly as EmberSync rather than using Python's default user agent, which the site edge rejects. No endpoint, signature, scope or redirect policy is relaxed. The website is published separately and allows enrollment only for the full public-key fingerprint of the specifically approved Windows PC; other devices are blocked. The unchanged addon remains preview.2.
 
 The addon collects consented minimal roster/activity evidence and an optional read-only Guild Roster Manager 1.99422 provider. `/embersync plugins` shows installed/compatible/enabled status and explicit opt-in. GRM is not bundled. Its partial join/departure history, unknown inviters and calendar dates without verified timezone remain separate from Blizzard invitation counts and roster deltas. See `OPTIONAL-ADDONS.md` for researched sources.
 
