@@ -1,79 +1,13 @@
-# EmberSync
+# EmberSync 2.0 roster preview
 
-EmberSync is the private data bridge for the Raining Embers World of Warcraft
-guild sites. It combines a read-only Retail addon, a cross-platform desktop
-companion, and a server-enforced upload protocol.
+Fresh addon and Python/Tk desktop preview for Raining Embers. This separate branch retains the legacy commit as its parent for history; its source tree is intentionally fresh. Default branch, old release workflow, and production website are untouched.
 
-EmberSync is intentionally locked to two US guilds:
+Automatic site synchronization remains disabled. The GUI reads addon SavedVariables locally and never creates or sends credentials. Website publication is blocked separately; device enrollment cannot proceed until approved code is live and verified. Native package builds do not enable sync.
 
-- **Raining Embers**, founded on **Dalaran**
-- **Raining Embers Alts**, founded on **Wyrmrest Accord**
+The addon collects consented minimal roster/activity evidence only. Baselines are not historical joins, partial observations cannot remove members, invitations remain distinct from confirmed joins, unknown inviters remain unknown, and collector/reset epochs are not combined. Exact live WoW 12.1/API validation remains required; the addon currently pauses outside source-reference interface120100/build69587.
 
-A character outside those guilds is not collected. The website independently
-checks current Battle.net character ownership and the live Blizzard rosters
-before it pairs a device or accepts a sync. SavedVariables are never treated as
-proof of membership, rank, or permission.
+The new artifact-only workflow runs on this exact preview branch and manual dispatch. It uses standard free runners in this public repository: Windows2022 x64, macOS15 ARM64/Intel, and Ubuntu24.04 x64. It runs source tests, builds native executables, creates Windows setup/macOS DMG/Linux deb packages, and checks bundled self-tests/Tk creation. There is no GitHub release/deployment/signing credential step. Artifacts expire after3 days; real interactive installer and end-user integration QA remain required.
 
-## Project layout
+Windows setup is user-level, refuses to overwrite an executable, and creates no startup entry or credentials. macOS DMGs contain an ad-hoc-signed, unnotarized app for the recorded native architecture; no trusted Developer ID signature is claimed. Linux deb requires Ubuntu24.04/glibc2.39 or compatible runtime, not every Linux distribution. Installers are not executed in CI. NATIVE-BUILD.json records actual platform/architecture/hash/smoke results.
 
-- `EmberSync.toc`, `Core/`, `Collectors/`, `UI/`, `Locales/` — the in-game addon
-- `desktop/` — the Tauri 2 desktop companion
-- `protocol/` — versioned wire contracts and fixtures
-- `tests/` — addon and cross-component tests
-- `docs/` — architecture, privacy, security, and release notes
-- `scripts/` — reproducible addon packaging and artifact helpers
-- `installer/` — locally downloaded native release installers
-- `.github/workflows/` — validation and native release builds
-
-## Privacy and safety
-
-The addon uses only Blizzard's addon APIs and never performs protected actions.
-It does not send HTTP requests. The desktop reads SavedVariables without
-modifying them, rejects executable Lua, encrypts queued payloads, and uploads
-only after explicit site pairing.
-
-EmberSync excludes whispers, Battle.net messages and contacts, party and raid
-chat, mail bodies, raw combat-log streams, credentials, and Battle.net IDs.
-Sensitive collected data is private by default.
-
-See [Security](docs/SECURITY.md), [Privacy](docs/PRIVACY.md),
-[Data catalog](docs/DATA_CATALOG.md), and
-[Architecture](docs/ARCHITECTURE.md).
-
-## Development
-
-The addon can be installed by keeping this repository at:
-
-`World of Warcraft/_retail_/Interface/AddOns/EmberSync`
-
-Desktop prerequisites are Node.js 22 or newer, Rust stable, and the native
-Tauri 2 platform prerequisites. From `desktop/`:
-
-```text
-npm install
-npm run test
-npm run tauri build
-```
-
-Release installers are produced on native GitHub Actions runners and copied
-into `installer/windows`, `installer/macos`, and `installer/linux` by the
-release download script. Operating-system signing hooks are present, but the
-initial installers are unsigned.
-
-Installation and release-maintainer instructions live in
-[`docs/INSTALLATION.md`](docs/INSTALLATION.md) and
-[`docs/RELEASE.md`](docs/RELEASE.md).
-
-## Status
-
-Version `0.1.6` keeps the 15-minute guarded background scan and the 0.1.4
-secret-safe collection, passive calendar and world-quest discovery,
-multi-subdivision housing retention, first-class coverage synchronization, and
-one canonical dataset contract from the addon through the website. Calendar
-capture is restricted to explicit guild events; personal entries and
-invitations are excluded. Guild Bank gold deposits, withdrawals, and repair
-spending are collected from WoW's separate money log when a member naturally
-opens the Guild Bank. Existing
-0.1.3 state is reconciled once after upgrade so corrected G.M.O.D., guild
-metrics, and Neighborhood projections can be rebuilt without deleting local
-data.
+Build dependencies: desktop/requirements-build.txt. Source test command: `python -m unittest discover -s tests -v`. Native package script: scripts/package_native.py. GUI smoke only creates/destroys a temporary Tk window and does not open a game/export/account or create local evidence.
