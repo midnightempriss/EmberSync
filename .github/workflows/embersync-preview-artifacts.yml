@@ -28,7 +28,9 @@ jobs:
       - run: python -m PyInstaller --noconfirm --onefile --windowed --name EmberSync-Preview --osx-bundle-identifier org.rainingembers.EmberSyncPreview --hidden-import sync --hidden-import device --hidden-import cryptography --hidden-import keyring --distpath releases/native --workpath .build/native --specpath .build desktop/app.py
       - name: Windows setup
         if: runner.os == 'Windows'
-        run: python -m PyInstaller --noconfirm --onefile --windowed --name EmberSync-Preview-Setup --add-data "releases/native/EmberSync-Preview.exe;." --distpath releases/native --workpath .build/setup --specpath .build desktop/windows_installer.py
+        run: |
+          $payload = (Resolve-Path 'releases/native/EmberSync-Preview.exe').Path
+          python -m PyInstaller --noconfirm --onefile --windowed --name EmberSync-Preview-Setup --add-data "${payload};." --distpath releases/native --workpath .build/setup --specpath .build desktop/windows_installer.py
       - name: Package native installer and run safe bundled self-test
         run: python scripts/package_native.py
       - uses: actions/upload-artifact@v4
