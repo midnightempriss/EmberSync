@@ -38,3 +38,17 @@ else:raise RuntimeError('Unsupported native platform')
 files=[p for p in OUT.iterdir() if p.is_file()]
 manifest={'version':'2.0.0-preview.1','platform':system,'osVersion':platform.platform(),'architecture':arch,'pythonVersion':sys.version,'glibc':platform.libc_ver(),'sourceCommit':os.environ.get('GITHUB_SHA'),'sync':'disabled_offline_preview','signing':'ad_hoc_unnotarized' if system=='Darwin' else 'unsigned','nativeSelfTest':'passed','tkCreationSmokeTest':'passed','installerExecuted':False,'guiInteractionTested':False,'files':{p.name:{'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size} for p in files}}
 (OUT/'NATIVE-BUILD.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
+# The local executor transfers at most32MiB per artifact. Deliver independently
+# hashed20MiB chunks, reassembled byte-for-byte before any installer is used.
+package=next(p for p in files if p.name.endswith({'Windows':'-Setup.exe','Darwin':'.dmg','Linux':'.deb'}[system]))
+parts=[]
+with package.open('rb') as source:
+    for index in range(1,5):
+        data=source.read(20*1024*1024)
+        if not data:break
+        destination=Path(f'releases/delivery/part{index}');destination.mkdir(parents=True,exist_ok=False)
+        name=package.name+f'.part{index}';(destination/name).write_bytes(data)
+        parts.append({'name':name,'sha256':hashlib.sha256(data).hexdigest(),'size':len(data)})
+    if source.read(1):raise RuntimeError('Native package exceeds bounded chunk delivery')
+delivery={'nativeBuild':manifest,'package':package.name,'sha256':hashlib.sha256(package.read_bytes()).hexdigest(),'size':package.stat().st_size,'parts':parts}
+Path('releases/delivery/part1/DELIVERY.json').write_text(json.dumps(delivery,indent=2)+'\n',encoding='utf-8')
