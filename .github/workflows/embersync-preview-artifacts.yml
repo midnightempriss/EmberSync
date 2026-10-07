@@ -25,7 +25,13 @@ jobs:
       - run: python -c "import tkinter; print(tkinter.TkVersion)"
       - run: python -m pip install lupa==2.8
       - run: python -m unittest discover -s tests -v
-      - run: python -m PyInstaller --noconfirm --onefile --windowed --name EmberSync-Preview --osx-bundle-identifier org.rainingembers.EmberSyncPreview --hidden-import sync --hidden-import device --hidden-import cryptography --hidden-import keyring --distpath releases/native --workpath .build/native --specpath .build desktop/app.py
+      - name: Desktop control QA with fixture server and vault
+        if: runner.os != 'Linux'
+        run: python scripts/desktop_ui_qa.py
+      - name: Linux desktop control QA with fixture server and vault
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python scripts/desktop_ui_qa.py
+      - run: python -m PyInstaller --noconfirm --onefile --windowed --name EmberSync-Preview --osx-bundle-identifier org.rainingembers.EmberSyncPreview --hidden-import runtime --hidden-import pairing --hidden-import sync --hidden-import device --hidden-import cryptography --hidden-import keyring --hidden-import keyring.backends.Windows --hidden-import keyring.backends.macOS --hidden-import keyring.backends.SecretService --distpath releases/native --workpath .build/native --specpath .build desktop/app.py
       - name: Windows setup
         if: runner.os == 'Windows'
         run: |

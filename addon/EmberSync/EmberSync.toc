@@ -2,6 +2,8 @@
 ## Title: EmberSync
 ## Notes: Consent-based roster and guild log evidence journal
 ## Author: Raining Embers
-## Version: 2.0.0-preview.1
+## Version: 2.0.0-preview.2
 ## SavedVariables: EmberSyncJournalV2
+## OptionalDeps: Guild_Roster_Manager
+Providers.lua
 EmberSync.lua
